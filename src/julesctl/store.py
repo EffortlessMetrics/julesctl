@@ -78,7 +78,15 @@ CREATE TABLE IF NOT EXISTS deletion_plans (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_lifecycle ON sessions(lifecycle, archived);
 CREATE INDEX IF NOT EXISTS idx_attempts_state ON dispatch_attempts(state);
+CREATE INDEX IF NOT EXISTS idx_attempts_started ON dispatch_attempts(started_at);
 """
+
+_UNRESOLVED_ATTEMPT_STATES = (
+    "SEND_STARTED",
+    "RECONCILING",
+    "INDETERMINATE_NONE",
+    "INDETERMINATE_MULTIPLE",
+)
 
 
 class StateStore:
@@ -122,6 +130,21 @@ class StateStore:
             "SELECT * FROM work_items WHERE dispatch_key=?", (dispatch_key,)
         ).fetchone()
 
+    def starts_last_24h(self) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM dispatch_attempts "
+            "WHERE started_at >= datetime('now','-24 hours')"
+        ).fetchone()
+        return int(row["n"] if row else 0)
+
+    def unresolved_attempt_count(self) -> int:
+        marks = ",".join("?" for _ in _UNRESOLVED_ATTEMPT_STATES)
+        row = self._conn.execute(
+            f"SELECT COUNT(*) AS n FROM dispatch_attempts WHERE state IN ({marks})",
+            _UNRESOLVED_ATTEMPT_STATES,
+        ).fetchone()
+        return int(row["n"] if row else 0)
+
     def reserve_work(
         self,
         *,
@@ -129,6 +152,8 @@ class StateStore:
         fingerprint: str,
         attempt_id: str,
         attempt: dict[str, object],
+        max_occupancy: int | None = None,
+        max_starts_24h: int | None = None,
     ) -> dict[str, str | None]:
         with self.immediate() as conn:
             if self.is_frozen():
@@ -140,6 +165,37 @@ class StateStore:
                 if existing["fingerprint"] != fingerprint:
                     raise InputError("dispatch_key already exists with a different fingerprint")
                 return dict(existing)
+
+            if max_occupancy is not None:
+                active = conn.execute(
+                    "SELECT COUNT(*) AS n FROM sessions WHERE deleted_at IS NULL "
+                    "AND lifecycle IN ('executing','actionable','paused','unknown')"
+                ).fetchone()
+                marks = ",".join("?" for _ in _UNRESOLVED_ATTEMPT_STATES)
+                unresolved = conn.execute(
+                    f"SELECT COUNT(*) AS n FROM dispatch_attempts "
+                    f"WHERE session_id IS NULL AND state IN ({marks})",
+                    _UNRESOLVED_ATTEMPT_STATES,
+                ).fetchone()
+                occupancy = int(active["n"] if active else 0) + int(
+                    unresolved["n"] if unresolved else 0
+                )
+                if occupancy >= max_occupancy:
+                    raise AdmissionError(
+                        f"new-work admission is full ({occupancy}/{max_occupancy})"
+                    )
+
+            if max_starts_24h is not None:
+                recent = conn.execute(
+                    "SELECT COUNT(*) AS n FROM dispatch_attempts "
+                    "WHERE started_at >= datetime('now','-24 hours')"
+                ).fetchone()
+                starts = int(recent["n"] if recent else 0)
+                if starts >= max_starts_24h:
+                    raise AdmissionError(
+                        f"rolling start budget is reserved ({starts}/{max_starts_24h})"
+                    )
+
             conn.execute(
                 "INSERT INTO work_items(dispatch_key,fingerprint,attempt_id,status) VALUES(?,?,?,?)",
                 (dispatch_key, fingerprint, attempt_id, "SEND_STARTED"),
@@ -274,6 +330,15 @@ class StateStore:
             (session_id, activity_name, activity_id, create_time, event_type, payload_sha256),
         )
         return cur.rowcount == 1
+
+    def has_message_digest(self, session_id: str, digest: str) -> bool:
+        return (
+            self._conn.execute(
+                "SELECT 1 FROM activity_receipts WHERE session_id=? AND payload_sha256=? LIMIT 1",
+                (session_id, digest),
+            ).fetchone()
+            is not None
+        )
 
     def active_rows(self) -> list[sqlite3.Row]:
         return list(
