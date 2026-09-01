@@ -110,6 +110,8 @@ def test_same_dispatch_key_returns_existing_without_second_create(tmp_path: Path
                     ]
                 },
             )
+        if request.method == "GET" and request.url.path.endswith("/sessions"):
+            return httpx.Response(200, json={"sessions": []})
         if request.method == "POST" and request.url.path.endswith("/sessions"):
             creates += 1
             return httpx.Response(
