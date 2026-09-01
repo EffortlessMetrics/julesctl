@@ -81,13 +81,6 @@ CREATE INDEX IF NOT EXISTS idx_attempts_state ON dispatch_attempts(state);
 CREATE INDEX IF NOT EXISTS idx_attempts_started ON dispatch_attempts(started_at);
 """
 
-_UNRESOLVED_ATTEMPT_STATES = (
-    "SEND_STARTED",
-    "RECONCILING",
-    "INDETERMINATE_NONE",
-    "INDETERMINATE_MULTIPLE",
-)
-
 
 class StateStore:
     def __init__(self, path: Path) -> None:
@@ -137,14 +130,6 @@ class StateStore:
         ).fetchone()
         return int(row["n"] if row else 0)
 
-    def unresolved_attempt_count(self) -> int:
-        marks = ",".join("?" for _ in _UNRESOLVED_ATTEMPT_STATES)
-        row = self._conn.execute(
-            f"SELECT COUNT(*) AS n FROM dispatch_attempts WHERE state IN ({marks})",
-            _UNRESOLVED_ATTEMPT_STATES,
-        ).fetchone()
-        return int(row["n"] if row else 0)
-
     def reserve_work(
         self,
         *,
@@ -165,17 +150,14 @@ class StateStore:
                 if existing["fingerprint"] != fingerprint:
                     raise InputError("dispatch_key already exists with a different fingerprint")
                 return dict(existing)
-
             if max_occupancy is not None:
                 active = conn.execute(
                     "SELECT COUNT(*) AS n FROM sessions WHERE deleted_at IS NULL "
                     "AND lifecycle IN ('executing','actionable','paused','unknown')"
                 ).fetchone()
-                marks = ",".join("?" for _ in _UNRESOLVED_ATTEMPT_STATES)
                 unresolved = conn.execute(
-                    f"SELECT COUNT(*) AS n FROM dispatch_attempts "
-                    f"WHERE session_id IS NULL AND state IN ({marks})",
-                    _UNRESOLVED_ATTEMPT_STATES,
+                    "SELECT COUNT(*) AS n FROM dispatch_attempts WHERE session_id IS NULL "
+                    "AND state IN ('SEND_STARTED','RECONCILING','INDETERMINATE_NONE','INDETERMINATE_MULTIPLE')"
                 ).fetchone()
                 occupancy = int(active["n"] if active else 0) + int(
                     unresolved["n"] if unresolved else 0
@@ -184,7 +166,6 @@ class StateStore:
                     raise AdmissionError(
                         f"new-work admission is full ({occupancy}/{max_occupancy})"
                     )
-
             if max_starts_24h is not None:
                 recent = conn.execute(
                     "SELECT COUNT(*) AS n FROM dispatch_attempts "
@@ -195,7 +176,6 @@ class StateStore:
                     raise AdmissionError(
                         f"rolling start budget is reserved ({starts}/{max_starts_24h})"
                     )
-
             conn.execute(
                 "INSERT INTO work_items(dispatch_key,fingerprint,attempt_id,status) VALUES(?,?,?,?)",
                 (dispatch_key, fingerprint, attempt_id, "SEND_STARTED"),
@@ -281,6 +261,7 @@ class StateStore:
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(session_id) DO UPDATE SET
                 session_name=excluded.session_name,
+                origin=CASE WHEN excluded.origin='managed' THEN 'managed' ELSE sessions.origin END,
                 raw_state=excluded.raw_state,
                 lifecycle=excluded.lifecycle,
                 archived=excluded.archived,
@@ -313,6 +294,29 @@ class StateStore:
     def known_session_ids(self) -> set[str]:
         return {row[0] for row in self._conn.execute("SELECT session_id FROM sessions")}
 
+    def managed_session_ids(self) -> set[str]:
+        return {
+            row[0]
+            for row in self._conn.execute("SELECT session_id FROM sessions WHERE origin='managed'")
+        }
+
+    def reconcile_active_snapshot(self, seen_ids: set[str]) -> None:
+        rows = list(
+            self._conn.execute(
+                "SELECT session_id FROM sessions WHERE deleted_at IS NULL "
+                "AND lifecycle IN ('executing','actionable','paused','unknown')"
+            )
+        )
+        missing = [row[0] for row in rows if row[0] not in seen_ids]
+        if not missing:
+            return
+        placeholders = ",".join("?" for _ in missing)
+        self._conn.execute(
+            f"UPDATE sessions SET lifecycle='not_visible',last_observed_at=CURRENT_TIMESTAMP "
+            f"WHERE session_id IN ({placeholders})",
+            missing,
+        )
+
     def record_activity(
         self,
         *,
@@ -330,15 +334,6 @@ class StateStore:
             (session_id, activity_name, activity_id, create_time, event_type, payload_sha256),
         )
         return cur.rowcount == 1
-
-    def has_message_digest(self, session_id: str, digest: str) -> bool:
-        return (
-            self._conn.execute(
-                "SELECT 1 FROM activity_receipts WHERE session_id=? AND payload_sha256=? LIMIT 1",
-                (session_id, digest),
-            ).fetchone()
-            is not None
-        )
 
     def active_rows(self) -> list[sqlite3.Row]:
         return list(
