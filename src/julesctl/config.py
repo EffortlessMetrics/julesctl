@@ -30,6 +30,7 @@ class Settings:
     configured_rolling_start_limit: int = 100
     new_work_target: int = 12
     reactive_reserve: int = 3
+    rolling_start_reserve: int = 5
 
     @classmethod
     def from_env(cls) -> "Settings":
