@@ -1,0 +1,33 @@
+name: Jules API drift
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 11 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  discovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e .
+      - name: Validate current Discovery operation surface
+        run: |
+          python - <<'PY'
+          from julesctl.discovery import fetch_discovery
+          payload, summary = fetch_discovery()
+          print(f"revision={summary.revision}")
+          print(f"digest={summary.digest}")
+          print(f"operations={len(summary.operations)}")
+          print("\n".join(summary.operations))
+          if not summary.compatible:
+              raise SystemExit(f"missing expected Jules operations: {summary.missing_expected}")
+          if summary.unexpected:
+              print(f"::warning::new Jules operations require review: {summary.unexpected}")
+          PY
