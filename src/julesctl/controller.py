@@ -26,12 +26,7 @@ class JulesController:
         self.ctx = context
 
     @classmethod
-    def from_settings(
-        cls,
-        settings: Settings,
-        *,
-        api: JulesApiClient | None = None,
-    ) -> "JulesController":
+    def from_settings(cls, settings: Settings, *, api: JulesApiClient | None = None) -> "JulesController":
         client = api or JulesApiClient(settings.api_key, base_url=settings.base_url)
         return cls(ControllerContext(settings, client, StateStore(settings.database_path)))
 
@@ -95,8 +90,7 @@ class JulesController:
                 "starting_branch": start,
                 "working_branch": working,
                 "title": session.title,
-                "prompt_sha256": prompt_sha256
-                or (sha256_text(session.prompt) if session.prompt else None),
+                "prompt_sha256": prompt_sha256 or (sha256_text(session.prompt) if session.prompt else None),
                 "pr_url": pr["url"] if pr else None,
             }
         )
@@ -107,30 +101,21 @@ class JulesController:
 
     def resolve_source(self, repo: str) -> dict[str, object]:
         source = self.ctx.api.resolve_source(repo)
-        default = (
-            source.github_repo.default_branch.display_name
-            if source.github_repo and source.github_repo.default_branch
-            else None
-        )
+        default = source.github_repo.default_branch.display_name if source.github_repo and source.github_repo.default_branch else None
         return {"repo": repo, "source_name": source.name, "default_branch": default}
 
     def list_sessions(self, *, all_history: bool = False) -> list[dict[str, object]]:
         filter_value = "archived = true OR archived = false" if all_history else None
         known = self.ctx.store.known_session_ids()
-        sessions = list(self.ctx.api.iter_sessions(filter_value=filter_value))
         result: list[dict[str, object]] = []
+        sessions = list(self.ctx.api.iter_sessions(filter_value=filter_value))
         for session in sessions:
             origin = "managed" if session.id in known else "external"
             self._remember_session(session, origin=origin)
             result.append(self.normalize_session(session, origin=origin))
         return result
 
-    def normalize_session(
-        self,
-        session: SessionWire,
-        *,
-        origin: str = "unknown",
-    ) -> dict[str, object]:
+    def normalize_session(self, session: SessionWire, *, origin: str = "unknown") -> dict[str, object]:
         state = classify_state(session.state)
         source, start, working = self._session_source(session)
         return {
@@ -164,9 +149,7 @@ class JulesController:
             source_name = source.name
             if not starting_branch:
                 if not source.github_repo or not source.github_repo.default_branch:
-                    raise InputError(
-                        "starting branch was not supplied and source has no default branch"
-                    )
+                    raise InputError("starting branch was not supplied and source has no default branch")
                 starting_branch = source.github_repo.default_branch.display_name
         elif starting_branch:
             raise InputError("starting_branch requires repo")
@@ -179,9 +162,7 @@ class JulesController:
             "prompt_sha256": prompt_hash,
             "title": spec.title,
             "require_plan_approval": spec.require_plan_approval,
-            "automation_mode": (
-                "AUTO_CREATE_PR" if spec.auto_create_pr else "AUTOMATION_MODE_UNSPECIFIED"
-            ),
+            "automation_mode": "AUTO_CREATE_PR" if spec.auto_create_pr else "AUTOMATION_MODE_UNSPECIFIED",
             "environment_variables_enabled": False,
         }
         fingerprint = request_fingerprint(fingerprint_data)
@@ -199,6 +180,8 @@ class JulesController:
                 }
             return self.reconcile_attempt(str(existing["attempt_id"]), delays=reconcile_delays)
 
+        # Refresh visible account occupancy before the transactional local reservation.
+        self.list_sessions(all_history=False)
         attempt_id = str(uuid.uuid4())
         working_branch = None
         if spec.repo:
@@ -217,6 +200,12 @@ class JulesController:
                 "title": spec.title,
                 "prompt_sha256": prompt_hash,
             },
+            max_occupancy=self.ctx.settings.new_work_target,
+            max_starts_24h=max(
+                self.ctx.settings.configured_rolling_start_limit
+                - self.ctx.settings.rolling_start_reserve,
+                0,
+            ),
         )
         if reservation.get("attempt_id") != attempt_id:
             if reservation.get("session_id"):
@@ -227,10 +216,7 @@ class JulesController:
                     "fingerprint": fingerprint,
                     "attempt_id": reservation["attempt_id"],
                 }
-            return self.reconcile_attempt(
-                str(reservation["attempt_id"]), delays=reconcile_delays
-            )
-
+            return self.reconcile_attempt(str(reservation["attempt_id"]), delays=reconcile_delays)
         body: dict[str, object] = {"prompt": spec.prompt, "title": spec.title}
         if source_name:
             body["sourceContext"] = {
@@ -267,12 +253,7 @@ class JulesController:
             return result
 
         self.ctx.store.bind_session(attempt_id, session.id, reconciled=False)
-        self._remember_session(
-            session,
-            origin="managed",
-            repo=spec.repo,
-            prompt_sha256=prompt_hash,
-        )
+        self._remember_session(session, origin="managed", repo=spec.repo, prompt_sha256=prompt_hash)
         return {
             "outcome": "created",
             "session": self.normalize_session(session, origin="managed"),
@@ -282,10 +263,7 @@ class JulesController:
         }
 
     def reconcile_attempt(
-        self,
-        attempt_id: str,
-        *,
-        delays: tuple[float, ...] = (0.0, 1.0, 2.0, 4.0, 8.0),
+        self, attempt_id: str, *, delays: tuple[float, ...] = (0.0, 1.0, 2.0, 4.0, 8.0)
     ) -> dict[str, object]:
         attempt = self.ctx.store.get_attempt(attempt_id)
         if not attempt:
@@ -297,7 +275,6 @@ class JulesController:
                 "attempt_id": attempt_id,
                 "fingerprint": attempt["fingerprint"],
             }
-
         candidates: list[SessionWire] = []
         for delay in delays:
             if delay:
@@ -333,7 +310,6 @@ class JulesController:
                 }
             if len(candidates) > 1:
                 break
-
         ids = [session.id for session in candidates]
         state = "INDETERMINATE_MULTIPLE" if len(ids) > 1 else "INDETERMINATE_NONE"
         self.ctx.store.mark_attempt_error(attempt_id, state)
@@ -378,13 +354,15 @@ class JulesController:
 
     def session_result(self, session_id: str) -> dict[str, object]:
         session = self.ctx.api.get_session(session_id)
-        origin = "managed" if session.id in self.ctx.store.known_session_ids() else "external"
-        self._remember_session(session, origin=origin)
+        self._remember_session(session, origin="managed" if session.id in self.ctx.store.known_session_ids() else "external")
         activities = [
             activity.model_dump(by_alias=True, exclude_none=True)
             for activity in self.ctx.api.iter_activities(session.id)
         ]
-        return {"session": self.normalize_session(session, origin=origin), "activities": activities}
+        return {
+            "session": self.normalize_session(session),
+            "activities": activities,
+        }
 
     def create_drain_plan(self) -> dict[str, object]:
         self.list_sessions(all_history=False)
@@ -392,18 +370,13 @@ class JulesController:
             {
                 "session_id": row["session_id"],
                 "snapshot_state": row["raw_state"],
-                "snapshot_archived": (
-                    bool(row["archived"]) if row["archived"] is not None else None
-                ),
+                "snapshot_archived": bool(row["archived"]) if row["archived"] is not None else None,
             }
             for row in self.ctx.store.active_rows()
             if row["lifecycle"] != "unknown"
         ]
         plan_id = "drain_" + uuid.uuid4().hex[:16]
-        selector = {
-            "lifecycles": ["executing", "actionable", "paused"],
-            "include_unknown": False,
-        }
+        selector = {"lifecycles": ["executing", "actionable", "paused"], "include_unknown": False}
         self.ctx.store.create_deletion_plan(plan_id, selector, targets)
         return {"plan_id": plan_id, "selector": selector, "targets": targets}
 
@@ -422,9 +395,7 @@ class JulesController:
                 else:
                     already_absent += 1
             except ApiError as exc:
-                failed.append(
-                    {"session_id": sid, "status": exc.http_status, "error": str(exc)}
-                )
+                failed.append({"session_id": sid, "status": exc.http_status, "error": str(exc)})
         return {
             "plan_id": plan_id,
             "deleted": deleted,
@@ -449,9 +420,9 @@ class JulesController:
                 "rolling_24h_starts": self.ctx.settings.configured_rolling_start_limit,
                 "new_work_target": self.ctx.settings.new_work_target,
                 "reactive_reserve": self.ctx.settings.reactive_reserve,
+                "rolling_start_reserve": self.ctx.settings.rolling_start_reserve,
             },
-            "available_new_work_slots": max(
-                self.ctx.settings.new_work_target - occupied, 0
-            ),
+            "managed_starts_rolling_24h": self.ctx.store.starts_last_24h(),
+            "available_new_work_slots": max(self.ctx.settings.new_work_target - occupied, 0),
             "coverage": "best_effort",
         }
