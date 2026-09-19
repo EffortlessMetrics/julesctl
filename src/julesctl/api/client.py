@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import random
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -12,6 +15,11 @@ from ..domain.errors import ApiError
 from ..domain.models import ActivityWire, SessionWire, SourceWire
 
 QueryValue = str | int | float | bool | None
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _default_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class JulesApiClient:
@@ -24,6 +32,10 @@ class JulesApiClient:
         base_url: str = "https://jules.googleapis.com/v1alpha",
         transport: httpx.BaseTransport | None = None,
         timeout_seconds: float = 30.0,
+        sleep: Callable[[float], None] = time.sleep,
+        random_value: Callable[[], float] = random.random,
+        now: Callable[[], datetime] = _default_now,
+        max_retry_delay_seconds: float = 60.0,
     ) -> None:
         normalized_base_url = base_url.rstrip("/")
         parsed = urlsplit(normalized_base_url)
@@ -31,6 +43,14 @@ class JulesApiClient:
             raise ValueError("Jules API base_url must use HTTPS")
         if not parsed.hostname:
             raise ValueError("Jules API base_url must include a hostname")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        if max_retry_delay_seconds <= 0:
+            raise ValueError("max_retry_delay_seconds must be positive")
+        self._sleep = sleep
+        self._random_value = random_value
+        self._now = now
+        self._max_retry_delay_seconds = max_retry_delay_seconds
         self._client = httpx.Client(
             base_url=normalized_base_url,
             headers={"X-Goog-Api-Key": api_key, "Accept": "application/json"},
@@ -49,8 +69,28 @@ class JulesApiClient:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    @staticmethod
-    def _error(response: httpx.Response) -> ApiError:
+    def _parse_retry_after(self, value: str | None) -> float | None:
+        if value is None:
+            return None
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            seconds = int(candidate)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(candidate)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            seconds_value = (
+                retry_at.astimezone(UTC) - self._now().astimezone(UTC)
+            ).total_seconds()
+            return max(seconds_value, 0.0)
+        return float(max(seconds, 0))
+
+    def _error(self, response: httpx.Response) -> ApiError:
         payload: dict[str, object] = {}
         try:
             raw = response.json()
@@ -67,6 +107,7 @@ class JulesApiClient:
             http_status=response.status_code,
             api_status=str(status) if status else None,
             body=payload,
+            retry_after_seconds=self._parse_retry_after(response.headers.get("Retry-After")),
         )
 
     @staticmethod
@@ -101,6 +142,16 @@ class JulesApiClient:
             raise self._error(response)
         return response
 
+    @staticmethod
+    def _is_retryable(exc: ApiError) -> bool:
+        return exc.http_status is None or exc.http_status in _RETRYABLE_STATUS_CODES
+
+    def _retry_delay(self, exc: ApiError, *, backoff_seconds: float) -> float:
+        if exc.retry_after_seconds is not None:
+            return min(exc.retry_after_seconds, self._max_retry_delay_seconds)
+        jitter = backoff_seconds * 0.25 * max(min(self._random_value(), 1.0), 0.0)
+        return min(backoff_seconds + jitter, self._max_retry_delay_seconds)
+
     def _safe_read(
         self,
         path: str,
@@ -108,27 +159,18 @@ class JulesApiClient:
         params: dict[str, QueryValue] | None = None,
         attempts: int = 4,
     ) -> httpx.Response:
-        delay = 0.25
-        last: ApiError | None = None
+        if attempts < 1:
+            raise ValueError("attempts must be at least 1")
+        backoff_seconds = 0.25
         for index in range(attempts):
             try:
                 return self._request_once("GET", path, params=params)
             except ApiError as exc:
-                last = exc
-                if exc.http_status is not None and exc.http_status not in {
-                    429,
-                    500,
-                    502,
-                    503,
-                    504,
-                }:
+                if not self._is_retryable(exc) or index + 1 == attempts:
                     raise
-                if index + 1 == attempts:
-                    raise
-                time.sleep(delay)
-                delay = min(delay * 2, 2.0)
-        assert last is not None
-        raise last
+                self._sleep(self._retry_delay(exc, backoff_seconds=backoff_seconds))
+                backoff_seconds = min(backoff_seconds * 2, 2.0)
+        raise AssertionError("retry loop exhausted without returning or raising")
 
     def _iter_pages(
         self,
@@ -141,6 +183,8 @@ class JulesApiClient:
     ) -> Iterator[dict[str, Any]]:
         if not 1 <= page_size <= 100:
             raise ValueError("page_size must be between 1 and 100")
+        if max_pages < 1:
+            raise ValueError("max_pages must be at least 1")
         token: str | None = None
         seen_tokens: set[str] = set()
         seen_names: set[str] = set()
@@ -199,18 +243,8 @@ class JulesApiClient:
             )
         return matches[0]
 
-    def iter_sessions(
-        self,
-        *,
-        page_size: int = 100,
-        filter_value: str | None = None,
-    ) -> Iterable[SessionWire]:
-        params: dict[str, QueryValue] = {}
-        if filter_value:
-            params["filter"] = filter_value
-        for item in self._iter_pages(
-            "/sessions", item_key="sessions", page_size=page_size, params=params
-        ):
+    def iter_sessions(self, *, page_size: int = 100) -> Iterable[SessionWire]:
+        for item in self._iter_pages("/sessions", item_key="sessions", page_size=page_size):
             yield SessionWire.model_validate(item)
 
     def get_session(self, session_id: str) -> SessionWire:
@@ -247,41 +281,35 @@ class JulesApiClient:
         payload = self._json_object(response, context="unarchive session")
         return SessionWire.model_validate(payload)
 
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(self, session_id: str, *, attempts: int = 4) -> bool:
+        if attempts < 1:
+            raise ValueError("attempts must be at least 1")
         sid = session_id.removeprefix("sessions/")
-        delay = 0.25
-        for index in range(4):
+        backoff_seconds = 0.25
+        for index in range(attempts):
             try:
                 self._request_once("DELETE", f"/sessions/{sid}")
                 return True
             except ApiError as exc:
                 if exc.http_status == 404:
                     return False
-                if exc.http_status is not None and exc.http_status not in {
-                    429,
-                    500,
-                    502,
-                    503,
-                    504,
-                }:
+                if not self._is_retryable(exc) or index + 1 == attempts:
                     raise
-                if index == 3:
-                    raise
-                time.sleep(delay)
-                delay = min(delay * 2, 2.0)
-        return False
+                self._sleep(self._retry_delay(exc, backoff_seconds=backoff_seconds))
+                backoff_seconds = min(backoff_seconds * 2, 2.0)
+        raise AssertionError("retry loop exhausted without returning or raising")
 
     def iter_activities(
         self,
         session_id: str,
         *,
         page_size: int = 100,
-        filter_value: str | None = None,
+        create_time: str | None = None,
     ) -> Iterable[ActivityWire]:
         sid = session_id.removeprefix("sessions/")
         params: dict[str, QueryValue] = {}
-        if filter_value:
-            params["filter"] = filter_value
+        if create_time:
+            params["createTime"] = create_time
         for item in self._iter_pages(
             f"/sessions/{sid}/activities",
             item_key="activities",
@@ -289,3 +317,10 @@ class JulesApiClient:
             params=params,
         ):
             yield ActivityWire.model_validate(item)
+
+    def get_activity(self, session_id: str, activity_id: str) -> ActivityWire:
+        sid = session_id.removeprefix("sessions/")
+        aid = activity_id.rsplit("/", 1)[-1]
+        response = self._safe_read(f"/sessions/{sid}/activities/{aid}")
+        payload = self._json_object(response, context="get activity")
+        return ActivityWire.model_validate(payload)
