@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import platform
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from .domain.errors import AuthError
 
 DEFAULT_BASE_URL = "https://jules.googleapis.com/v1alpha"
 
@@ -18,14 +20,21 @@ def state_root() -> Path:
         return Path(base or Path.home() / "AppData" / "Local") / "julesctl"
     if system == "Darwin":
         return Path.home() / "Library" / "Application Support" / "julesctl"
-    return Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "julesctl"
+    return (
+        Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
+        / "julesctl"
+    )
+
+
+def default_database_path() -> Path:
+    return state_root() / "state.db"
 
 
 @dataclass(frozen=True)
 class Settings:
     api_key: str
     base_url: str = DEFAULT_BASE_URL
-    database_path: Path = state_root() / "state.db"
+    database_path: Path = field(default_factory=default_database_path)
     configured_concurrency_limit: int = 15
     configured_rolling_start_limit: int = 100
     new_work_target: int = 12
@@ -33,8 +42,8 @@ class Settings:
     rolling_start_reserve: int = 5
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         api_key = os.environ.get("JULES_API_KEY", "").strip()
         if not api_key:
-            raise ValueError("JULES_API_KEY is not set")
+            raise AuthError("JULES_API_KEY is not set")
         return cls(api_key=api_key)

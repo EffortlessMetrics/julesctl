@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://effortlessmetrics.dev/julesctl/operation-v1.schema.json",
+  "title": "julesctl operation v1",
+  "type": "object",
+  "required": ["schema", "operation_id", "command", "outcome"],
+  "properties": {
+    "schema": {"const": "julesctl.operation.v1"},
+    "operation_id": {"type": "string", "format": "uuid"},
+    "command": {"type": "string", "minLength": 1},
+    "outcome": {"type": "string", "minLength": 1},
+    "data": {},
+    "error": {
+      "type": "object",
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "message": {"type": "string"},
+        "http_status": {"type": ["integer", "null"]},
+        "api_status": {"type": ["string", "null"]},
+        "transient": {"type": "boolean"},
+        "safe_to_retry": {"type": "boolean"},
+        "reconcile_required": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "meta": {"type": "object"}
+  },
+  "additionalProperties": false
+}

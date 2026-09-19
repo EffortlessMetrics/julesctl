@@ -1,17 +1,26 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from ..application.steering import approve_once, archive_once, message_once, unarchive_once
-from ..config import Settings
+from ..config import Settings, default_database_path
 from ..controller import JulesController
 from ..discovery import fetch_discovery
-from ..domain.errors import JulesCtlError
+from ..domain.errors import (
+    AdmissionError,
+    ApiError,
+    AuthError,
+    IndeterminateError,
+    InputError,
+    JulesCtlError,
+)
 from ..domain.models import DispatchSpec
-from .output import console, emit_json, emit_jsonl, operation
+from ..store import StateStore
+from .output import console, emit_json, emit_jsonl, err_console, event, operation
 
 app = typer.Typer(help="Safe control of Google Jules cloud coding sessions.", no_args_is_help=True)
 auth_app = typer.Typer(help="Authentication diagnostics")
@@ -30,16 +39,58 @@ def _controller() -> JulesController:
     return JulesController.from_settings(Settings.from_env())
 
 
+def _error_kind(exc: Exception) -> str:
+    if isinstance(exc, AuthError):
+        return "authentication_failed"
+    if isinstance(exc, AdmissionError):
+        return "admission_denied"
+    if isinstance(exc, IndeterminateError):
+        return "indeterminate"
+    if isinstance(exc, InputError | ValueError):
+        return "invalid_input"
+    if isinstance(exc, ApiError):
+        return "create_outcome_unknown" if exc.create_outcome_uncertain else "api_rejected"
+    return "internal_error"
+
+
+def _error_details(exc: Exception) -> dict[str, object]:
+    value: dict[str, object] = {
+        "kind": _error_kind(exc),
+        "message": str(exc),
+    }
+    if isinstance(exc, ApiError):
+        value.update(
+            {
+                "http_status": exc.http_status,
+                "api_status": exc.api_status,
+                "transient": exc.create_outcome_uncertain,
+                "safe_to_retry": False,
+                "reconcile_required": exc.create_outcome_uncertain,
+            }
+        )
+    elif isinstance(exc, IndeterminateError):
+        value.update(
+            {
+                "transient": True,
+                "safe_to_retry": False,
+                "reconcile_required": True,
+            }
+        )
+    return value
+
+
 def _error(command: str, exc: Exception, *, machine: bool) -> None:
     if machine:
-        emit_json({
+        value = {
             "schema": "julesctl.operation.v1",
+            "operation_id": str(uuid.uuid4()),
             "command": command,
             "outcome": "error",
-            "error": {"kind": exc.__class__.__name__, "message": str(exc)},
-        })
+            "error": _error_details(exc),
+        }
+        emit_json(value)
     else:
-        console.print(f"[red]{exc}[/red]")
+        err_console.print(f"[red]{exc}[/red]")
     raise typer.Exit(getattr(exc, "exit_code", 2)) from exc
 
 
@@ -68,8 +119,9 @@ def api_check(json_output: Annotated[bool, typer.Option("--json")] = False) -> N
             "unexpected": list(summary.unexpected),
             "compatible": summary.compatible,
         }
+        outcome = "completed" if summary.compatible else "drift"
         if json_output:
-            emit_json(operation("api.check", "completed" if summary.compatible else "drift", data))
+            emit_json(operation("api.check", outcome, data))
         else:
             console.print(data)
         if not summary.compatible:
@@ -93,7 +145,10 @@ def source_list(json_output: Annotated[bool, typer.Option("--json")] = False) ->
 
 
 @source_app.command("resolve")
-def source_resolve(repo: str, json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+def source_resolve(
+    repo: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
     try:
         with _controller() as ctl:
             result = ctl.resolve_source(repo)
@@ -129,6 +184,8 @@ def session_list(
     jsonl: Annotated[bool, typer.Option("--jsonl")] = False,
 ) -> None:
     try:
+        if json_output and jsonl:
+            raise InputError("--json and --jsonl are mutually exclusive")
         with _controller() as ctl:
             items = ctl.list_sessions(all_history=all_history)
         if jsonl:
@@ -143,10 +200,16 @@ def session_list(
 
 
 @session_app.command("show")
-def session_show(session_id: str, json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+def session_show(
+    session_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
     try:
         with _controller() as ctl:
-            result = ctl.normalize_session(ctl.ctx.api.get_session(session_id))
+            session = ctl.ctx.api.get_session(session_id)
+            origin = "managed" if session.id in ctl.ctx.store.managed_session_ids() else "external"
+            ctl._remember_session(session, origin=origin)
+            result = ctl.normalize_session(session, origin=origin)
         if json_output:
             emit_json(operation("session.show", "completed", result))
         else:
@@ -174,7 +237,10 @@ def session_message(
 
 
 @session_app.command("approve")
-def session_approve(session_id: str, json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+def session_approve(
+    session_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
     try:
         with _controller() as ctl:
             result = approve_once(ctl.ctx.api, session_id)
@@ -187,7 +253,10 @@ def session_approve(session_id: str, json_output: Annotated[bool, typer.Option("
 
 
 @session_app.command("result")
-def session_result(session_id: str, json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+def session_result(
+    session_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
     try:
         with _controller() as ctl:
             result = ctl.session_result(session_id)
@@ -200,7 +269,10 @@ def session_result(session_id: str, json_output: Annotated[bool, typer.Option("-
 
 
 @session_app.command("pr")
-def session_pr(session_id: str, json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+def session_pr(
+    session_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
     try:
         with _controller() as ctl:
             session = ctl.ctx.api.get_session(session_id)
@@ -225,9 +297,16 @@ def session_adopt(
             session = ctl.ctx.api.get_session(session_id)
             row = ctl.ctx.store.get_attempt(attempt)
             if row is None:
-                raise ValueError(f"unknown attempt {attempt}")
+                raise InputError(f"unknown attempt {attempt}")
+            if not ctl._candidate_matches(row, session):
+                raise InputError("session does not match the stored dispatch attempt")
             ctl.ctx.store.bind_session(attempt, session.id, reconciled=True)
-            ctl._remember_session(session, origin="managed", repo=row["repo"], prompt_sha256=row["prompt_sha256"])
+            ctl._remember_session(
+                session,
+                origin="managed",
+                repo=row["repo"],
+                prompt_sha256=row["prompt_sha256"],
+            )
             result = {"session_id": session.id, "attempt_id": attempt, "outcome": "adopted"}
         if json_output:
             emit_json(operation("session.adopt", "adopted", result))
@@ -237,6 +316,41 @@ def session_adopt(
         _error("session.adopt", exc, machine=json_output)
 
 
+def _bulk_lifecycle(
+    command: str,
+    session_ids: list[str],
+    *,
+    desired_archived: bool,
+    json_output: bool,
+) -> None:
+    try:
+        if not session_ids:
+            raise InputError("at least one session ID is required")
+        items: list[dict[str, object]] = []
+        with _controller() as ctl:
+            for sid in session_ids:
+                try:
+                    result = (
+                        archive_once(ctl.ctx.api, sid)
+                        if desired_archived
+                        else unarchive_once(ctl.ctx.api, sid)
+                    )
+                    items.append(result)
+                except JulesCtlError as exc:
+                    items.append({"session_id": sid, "outcome": "error", "error": _error_details(exc)})
+        outcome = "partial" if any(item.get("outcome") == "error" for item in items) else "completed"
+        if json_output:
+            emit_json(operation(command, outcome, {"items": items}))
+        else:
+            console.print(items)
+        if outcome == "partial":
+            raise typer.Exit(6)
+    except typer.Exit:
+        raise
+    except (JulesCtlError, ValueError) as exc:
+        _error(command, exc, machine=json_output)
+
+
 @session_app.command("archive")
 def session_archive(
     session_ids: list[str],
@@ -244,16 +358,13 @@ def session_archive(
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     if not yes:
-        raise typer.BadParameter("--yes is required for archive")
-    try:
-        with _controller() as ctl:
-            items = [archive_once(ctl.ctx.api, sid) for sid in session_ids]
-        if json_output:
-            emit_json(operation("session.archive", "completed", {"items": items}))
-        else:
-            console.print(items)
-    except (JulesCtlError, ValueError) as exc:
-        _error("session.archive", exc, machine=json_output)
+        _error("session.archive", InputError("--yes is required for archive"), machine=json_output)
+    _bulk_lifecycle(
+        "session.archive",
+        session_ids,
+        desired_archived=True,
+        json_output=json_output,
+    )
 
 
 @session_app.command("unarchive")
@@ -263,16 +374,13 @@ def session_unarchive(
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     if not yes:
-        raise typer.BadParameter("--yes is required for unarchive")
-    try:
-        with _controller() as ctl:
-            items = [unarchive_once(ctl.ctx.api, sid) for sid in session_ids]
-        if json_output:
-            emit_json(operation("session.unarchive", "completed", {"items": items}))
-        else:
-            console.print(items)
-    except (JulesCtlError, ValueError) as exc:
-        _error("session.unarchive", exc, machine=json_output)
+        _error("session.unarchive", InputError("--yes is required for unarchive"), machine=json_output)
+    _bulk_lifecycle(
+        "session.unarchive",
+        session_ids,
+        desired_archived=False,
+        json_output=json_output,
+    )
 
 
 @session_app.command("delete")
@@ -281,19 +389,36 @@ def session_delete(
     yes: Annotated[bool, typer.Option("--yes")] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    if not yes:
-        raise typer.BadParameter("--yes is required for deletion")
     try:
-        items = []
+        if not yes:
+            raise InputError("--yes is required for deletion")
+        if not session_ids:
+            raise InputError("at least one session ID is required")
+        items: list[dict[str, object]] = []
         with _controller() as ctl:
             for session_id in session_ids:
-                removed = ctl.ctx.api.delete_session(session_id)
-                ctl.ctx.store.mark_deleted(session_id)
-                items.append({"session_id": session_id, "outcome": "deleted" if removed else "already_absent"})
+                try:
+                    removed = ctl.ctx.api.delete_session(session_id)
+                    ctl.ctx.store.mark_deleted(session_id)
+                    items.append(
+                        {
+                            "session_id": session_id,
+                            "outcome": "deleted" if removed else "already_absent",
+                        }
+                    )
+                except JulesCtlError as exc:
+                    items.append(
+                        {"session_id": session_id, "outcome": "error", "error": _error_details(exc)}
+                    )
+        outcome = "partial" if any(item.get("outcome") == "error" for item in items) else "completed"
         if json_output:
-            emit_json(operation("session.delete", "completed", {"items": items}))
+            emit_json(operation("session.delete", outcome, {"items": items}))
         else:
             console.print(items)
+        if outcome == "partial":
+            raise typer.Exit(6)
+    except typer.Exit:
+        raise
     except (JulesCtlError, ValueError) as exc:
         _error("session.delete", exc, machine=json_output)
 
@@ -304,10 +429,10 @@ def reconcile(jsonl: Annotated[bool, typer.Option("--jsonl")] = False) -> None:
         with _controller() as ctl:
             events = ctl.reconcile()
         if jsonl:
-            emit_jsonl(events)
+            emit_jsonl([event(item) for item in events])
         else:
-            for event in events:
-                console.print(event)
+            for item in events:
+                console.print(item)
     except (JulesCtlError, ValueError) as exc:
         _error("reconcile", exc, machine=jsonl)
 
@@ -327,18 +452,36 @@ def fleet_status(json_output: Annotated[bool, typer.Option("--json")] = False) -
 
 @fleet_app.command("freeze")
 def fleet_freeze(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
-    with _controller() as ctl:
-        ctl.ctx.store.set_frozen(True)
-    if json_output:
-        emit_json(operation("fleet.freeze", "completed", {"frozen": True}))
+    try:
+        store = StateStore(default_database_path())
+        try:
+            generation = store.set_frozen(True)
+        finally:
+            store.close()
+        result = {"frozen": True, "generation": generation}
+        if json_output:
+            emit_json(operation("fleet.freeze", "completed", result))
+        else:
+            console.print(result)
+    except (JulesCtlError, ValueError) as exc:
+        _error("fleet.freeze", exc, machine=json_output)
 
 
 @fleet_app.command("unfreeze")
 def fleet_unfreeze(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
-    with _controller() as ctl:
-        ctl.ctx.store.set_frozen(False)
-    if json_output:
-        emit_json(operation("fleet.unfreeze", "completed", {"frozen": False}))
+    try:
+        store = StateStore(default_database_path())
+        try:
+            generation = store.set_frozen(False)
+        finally:
+            store.close()
+        result = {"frozen": False, "generation": generation}
+        if json_output:
+            emit_json(operation("fleet.unfreeze", "completed", result))
+        else:
+            console.print(result)
+    except (JulesCtlError, ValueError) as exc:
+        _error("fleet.unfreeze", exc, machine=json_output)
 
 
 @fleet_app.command("drain")
@@ -351,13 +494,18 @@ def fleet_drain(
         with _controller() as ctl:
             if apply:
                 if not yes:
-                    raise typer.BadParameter("--yes is required with --apply")
+                    raise InputError("--yes is required with --apply")
                 result = ctl.apply_deletion_plan(apply)
             else:
                 result = ctl.create_drain_plan()
+        outcome = str(result.get("outcome", "completed"))
         if json_output:
-            emit_json(operation("fleet.drain", "completed", result))
+            emit_json(operation("fleet.drain", outcome, result))
         else:
             console.print(result)
+        if outcome == "partial":
+            raise typer.Exit(6)
+    except typer.Exit:
+        raise
     except (JulesCtlError, ValueError) as exc:
         _error("fleet.drain", exc, machine=json_output)
