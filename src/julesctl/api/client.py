@@ -85,7 +85,13 @@ class JulesApiClient:
         json_body: dict[str, object] | None = None,
     ) -> httpx.Response:
         try:
-            response = self._client.request(method, path, params=params, json=json_body)
+            request_params = httpx.QueryParams(params) if params else None
+            response = self._client.request(
+                method,
+                path,
+                params=request_params,
+                json=json_body,
+            )
         except httpx.HTTPError as exc:
             raise ApiError(str(exc)) from exc
         if not response.is_success:
