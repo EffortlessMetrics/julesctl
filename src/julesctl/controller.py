@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
@@ -377,7 +378,7 @@ class JulesController:
             "attempt_id": attempt_id,
         }
 
-    def _candidate_matches(self, attempt: object, session: SessionWire) -> bool:
+    def _candidate_matches(self, attempt: sqlite3.Row, session: SessionWire) -> bool:
         source, start, working = self._session_source(session)
         if source != attempt["source_name"]:
             return False
