@@ -8,6 +8,8 @@ It is intentionally **not** a port of `cjules`, a wrapper around the Google Labs
 
 `0.1.0a1` is an initial control-kernel candidate. The REST API is `v1alpha`; live mutations are opt-in and the implementation preserves unknown server fields and states rather than treating the current schema as closed.
 
+No authenticated Jules lifecycle is implied by unit or fault-simulation results. Live acceptance is a separate, budgeted campaign documented in [`docs/runbooks/live-acceptance.md`](docs/runbooks/live-acceptance.md).
+
 ## Install for development
 
 ```bash
@@ -16,7 +18,7 @@ python -m venv .venv
 pip install -e '.[dev]'
 ```
 
-Set the credential only in the environment:
+Set the credential only in the environment of trusted direct operations or the credentialed worker:
 
 ```bash
 export JULES_API_KEY='...'
@@ -46,6 +48,27 @@ julesctl fleet drain --json
 julesctl fleet drain --apply PLAN_ID --yes --json
 ```
 
+## Credential-isolated automation
+
+Candidate producers do not need `JULES_API_KEY`:
+
+```bash
+julesctl queue submit --spec task.json --json
+julesctl queue status --json
+```
+
+One trusted worker process receives the key and a repository allowlist:
+
+```bash
+JULES_API_KEY='...' \
+  julesctl worker run-once \
+  --max 5 \
+  --allow-repo EffortlessMetrics/perl-lsp \
+  --jsonl
+```
+
+The worker claims a bounded batch transactionally, applies repository policy, and preserves one result per candidate. A frozen fleet prevents new claims and dispatches.
+
 A machine dispatch packet looks like:
 
 ```json
@@ -73,4 +96,11 @@ A machine dispatch packet looks like:
 - Fleet deletion operates on exact stored target IDs, not a selector re-evaluated later.
 - `COMPLETED` means Jules finished an execution epoch; it does not mean the PR is accepted.
 
-See [`docs/architecture.md`](docs/architecture.md) and [`docs/threat-model.md`](docs/threat-model.md).
+## Operating guides
+
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/threat-model.md`](docs/threat-model.md)
+- [`docs/jules-delegation.md`](docs/jules-delegation.md)
+- [`docs/runbooks/drain-fleet.md`](docs/runbooks/drain-fleet.md)
+- [`docs/runbooks/indeterminate-create.md`](docs/runbooks/indeterminate-create.md)
+- [`docs/runbooks/live-acceptance.md`](docs/runbooks/live-acceptance.md)
