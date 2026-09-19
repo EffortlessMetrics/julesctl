@@ -1,0 +1,57 @@
+name: Temporary agent CLI finish
+
+on:
+  push:
+    branches: [feat/agent-native-cli]
+
+permissions:
+  contents: write
+
+jobs:
+  finish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev]'
+      - name: Register new command
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/julesctl/cli/app.py")
+          text = path.read_text(encoding="utf-8")
+          import_line = "from .agent import new_session\n"
+          marker = "from .output import console, emit_json, emit_jsonl, err_console, event, operation\n"
+          if import_line not in text:
+              if marker not in text:
+                  raise SystemExit("output import marker not found")
+              text = text.replace(marker, import_line + marker, 1)
+          registration = 'app.command("new")(new_session)\n'
+          marker = 'app.add_typer(worker_app, name="worker")\n'
+          if registration not in text:
+              if marker not in text:
+                  raise SystemExit("worker app marker not found")
+              text = text.replace(marker, marker + registration, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+          ruff format .
+          ruff check --fix .
+          mypy
+          pytest
+      - name: Commit verified registration
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name EffortlessSteven
+          git config user.email 15812269+EffortlessSteven@users.noreply.github.com
+          git add src/julesctl/cli/app.py src tests
+          git commit -m 'feat: register agent-native new command'
+          git push origin HEAD:${{ github.ref_name }}
