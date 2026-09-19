@@ -27,8 +27,11 @@ from .agent import (
     message_command,
     new_session,
     patch_command,
+    prune_command,
     pull_request_command,
+    remove_command,
     result_command,
+    retry_command,
     show_session_command,
     watch_command,
 )
@@ -60,6 +63,9 @@ app.command("approve")(approve_command)
 app.command("result")(result_command)
 app.command("patch")(patch_command)
 app.command("pr")(pull_request_command)
+app.command("rm")(remove_command)
+app.command("prune")(prune_command)
+app.command("retry")(retry_command)
 
 
 def _controller() -> JulesController:
