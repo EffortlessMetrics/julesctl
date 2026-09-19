@@ -111,7 +111,10 @@ def run_worker_once(
             try:
                 spec = DispatchSpec.model_validate_json(str(row["spec_json"]))
             except ValueError as exc:
-                error = {"kind": "invalid_candidate", "message": str(exc)}
+                error: dict[str, object] = {
+                    "kind": "invalid_candidate",
+                    "message": str(exc),
+                }
                 store.finish_candidate(candidate_id, state="FAILED", error=error)
                 outcomes.append(
                     {
