@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from .domain.errors import AdmissionError, InputError
 from .store import StateStore
@@ -91,9 +91,7 @@ class CandidateQueueStore:
             ).fetchone()
             if existing is not None:
                 if str(existing["spec_json"]) != spec_json:
-                    raise InputError(
-                        "dispatch_key is already queued with a different candidate"
-                    )
+                    raise InputError("dispatch_key is already queued with a different candidate")
                 return {
                     "outcome": "existing",
                     "candidate_id": existing["candidate_id"],
@@ -162,9 +160,7 @@ class CandidateQueueStore:
         if not 1 <= limit <= 100:
             raise InputError("claim limit must be between 1 and 100")
         with self.immediate() as conn:
-            frozen = conn.execute(
-                "SELECT value FROM meta WHERE key='fleet_frozen'"
-            ).fetchone()
+            frozen = conn.execute("SELECT value FROM meta WHERE key='fleet_frozen'").fetchone()
             if frozen is not None and str(frozen["value"]) == "1":
                 raise AdmissionError("fleet admission is frozen")
             rows = list(

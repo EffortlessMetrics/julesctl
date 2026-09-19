@@ -23,9 +23,7 @@ def load_candidate(path: Path) -> DispatchSpec:
         raise InputError("candidate spec must be a regular file")
     size = path.stat().st_size
     if size > MAX_CANDIDATE_BYTES:
-        raise InputError(
-            f"candidate spec is {size} bytes; maximum is {MAX_CANDIDATE_BYTES} bytes"
-        )
+        raise InputError(f"candidate spec is {size} bytes; maximum is {MAX_CANDIDATE_BYTES} bytes")
     try:
         payload = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:

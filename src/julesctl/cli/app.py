@@ -21,6 +21,7 @@ from ..domain.errors import (
 from ..domain.models import DispatchSpec
 from ..store import StateStore
 from .output import console, emit_json, emit_jsonl, err_console, event, operation
+from .queue import queue_app, worker_app
 
 app = typer.Typer(help="Safe control of Google Jules cloud coding sessions.", no_args_is_help=True)
 auth_app = typer.Typer(help="Authentication diagnostics")
@@ -35,6 +36,8 @@ app.add_typer(source_app, name="source")
 app.add_typer(session_app, name="session")
 app.add_typer(fleet_app, name="fleet")
 app.add_typer(state_app, name="state")
+app.add_typer(queue_app, name="queue")
+app.add_typer(worker_app, name="worker")
 
 
 def _controller() -> JulesController:

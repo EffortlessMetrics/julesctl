@@ -99,12 +99,7 @@ def worker_run_once(
             allow_repoless=allow_repoless,
         )
         if jsonl:
-            emit_jsonl(
-                [
-                    {"schema": "julesctl.worker-result.v1", **item}
-                    for item in outcomes
-                ]
-            )
+            emit_jsonl([{"schema": "julesctl.worker-result.v1", **item} for item in outcomes])
         elif json_output:
             emit_json(
                 operation(
