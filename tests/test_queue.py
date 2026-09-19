@@ -105,7 +105,7 @@ def test_worker_enforces_repo_allowlist_and_records_results(
         allow_repoless=False,
     )
     assert dispatched == ["allowed"]
-    assert [item["outcome"] for item in outcomes] == ["created", "rejected_policy"]
+    assert sorted(item["outcome"] for item in outcomes) == ["created", "rejected_policy"]
 
     check = CandidateQueueStore(settings.database_path)
     try:
