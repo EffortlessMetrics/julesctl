@@ -3,13 +3,12 @@ from __future__ import annotations
 import os
 import time
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
 from julesctl.api.client import JulesApiClient
 from julesctl.config import DEFAULT_BASE_URL
-
-pytestmark = pytest.mark.live
 
 
 def _require_live() -> str:
@@ -52,20 +51,51 @@ def _wait_terminal(api: JulesApiClient, session_id: str) -> str:
     pytest.fail(f"session {session_id} did not reach a terminal state; last state={last_state}")
 
 
+def _run_read_only_contract(api: JulesApiClient) -> None:
+    sources = list(api.iter_sources())
+    sessions = list(api.iter_sessions())
+    assert all(source.name for source in sources)
+    assert all(session.id and session.name for session in sessions)
+    if sessions:
+        session = api.get_session(sessions[0].id)
+        assert session.id == sessions[0].id
+        list(api.iter_activities(session.id))
+
+
+class _ReadOnlyClient:
+    def __init__(self) -> None:
+        self.activity_session_ids: list[str] = []
+
+    def iter_sources(self):
+        return iter([SimpleNamespace(name="sources/github/acme/repo")])
+
+    def iter_sessions(self):
+        return iter([SimpleNamespace(id="1", name="sessions/1")])
+
+    def get_session(self, session_id: str):
+        assert session_id == "1"
+        return SimpleNamespace(id="1", name="sessions/1")
+
+    def iter_activities(self, session_id: str):
+        self.activity_session_ids.append(session_id)
+        return iter(())
+
+
+def test_read_only_probe_uses_documented_unfiltered_session_list() -> None:
+    api = _ReadOnlyClient()
+    _run_read_only_contract(api)  # type: ignore[arg-type]
+    assert api.activity_session_ids == ["1"]
+
+
+@pytest.mark.live
 def test_live_read_only_contract() -> None:
     """Verify authentication, source pagination, fleet pagination, and activities."""
 
     with _client() as api:
-        sources = list(api.iter_sources())
-        sessions = list(api.iter_sessions(filter_value="archived = true OR archived = false"))
-        assert all(source.name for source in sources)
-        assert all(session.id and session.name for session in sessions)
-        if sessions:
-            session = api.get_session(sessions[0].id)
-            assert session.id == sessions[0].id
-            list(api.iter_activities(session.id))
+        _run_read_only_contract(api)
 
 
+@pytest.mark.live
 def test_live_repoless_lifecycle() -> None:
     """Create, observe, and delete one repoless session without repository effects."""
 
@@ -91,6 +121,7 @@ def test_live_repoless_lifecycle() -> None:
             api.delete_session(session.id)
 
 
+@pytest.mark.live
 def test_live_source_lifecycle() -> None:
     """Create and clean one source-backed session without automatic PR creation."""
 
