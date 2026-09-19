@@ -43,11 +43,13 @@ class ApiError(JulesCtlError):
         http_status: int | None = None,
         api_status: str | None = None,
         body: dict[str, object] | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(message)
         self.http_status = http_status
         self.api_status = api_status
         self.body = body or {}
+        self.retry_after_seconds = retry_after_seconds
 
     @property
     def create_outcome_uncertain(self) -> bool:
