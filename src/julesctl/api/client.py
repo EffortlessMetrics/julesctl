@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from pydantic import ValidationError
 
 from ..domain.errors import ApiError
 from ..domain.models import ActivityWire, SessionWire, SourceWire
@@ -221,7 +222,10 @@ class JulesApiClient:
     def create_session(self, body: dict[str, object]) -> SessionWire:
         response = self._request_once("POST", "/sessions", json_body=body)
         payload = self._json_object(response, context="create session")
-        return SessionWire.model_validate(payload)
+        try:
+            return SessionWire.model_validate(payload)
+        except ValidationError as exc:
+            raise ApiError("create session response did not contain a usable session") from exc
 
     def send_message(self, session_id: str, prompt: str) -> None:
         sid = session_id.removeprefix("sessions/")
