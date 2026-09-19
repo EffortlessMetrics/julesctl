@@ -36,25 +36,24 @@ jobs:
           output.write_text(text.replace(old, new, 1), encoding="utf-8")
 
           config = Path("src/julesctl/config.py")
-          text = config.read_text(encoding="utf-8")
-          old = dedent(
-              '''
-                  return (
-                      Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "julesctl"
-                  )
-              '''
-          ).lstrip("\n")
-          new = dedent(
-              '''
-                  xdg_state_home = os.environ.get("XDG_STATE_HOME") or str(
-                      Path.home() / ".local" / "state"
-                  )
-                  return Path(xdg_state_home).expanduser() / "julesctl"
-              '''
-          ).lstrip("\n")
-          if old not in text:
-              raise SystemExit(f"XDG state marker not found:\n{old!r}")
-          config.write_text(text.replace(old, new, 1), encoding="utf-8")
+          lines = config.read_text(encoding="utf-8").splitlines(keepends=True)
+          try:
+              target = next(
+                  index
+                  for index, line in enumerate(lines)
+                  if 'Path(os.environ.get("XDG_STATE_HOME"' in line
+              )
+          except StopIteration as exc:
+              raise SystemExit("XDG state marker not found") from exc
+          if target == 0 or lines[target - 1].strip() != "return (" or lines[target + 1].strip() != ")":
+              raise SystemExit("unexpected XDG state block shape")
+          lines[target - 1 : target + 2] = [
+              '    xdg_state_home = os.environ.get("XDG_STATE_HOME") or str(\n',
+              '        Path.home() / ".local" / "state"\n',
+              '    )\n',
+              '    return Path(xdg_state_home).expanduser() / "julesctl"\n',
+          ]
+          config.write_text("".join(lines), encoding="utf-8")
 
           store = Path("src/julesctl/store.py")
           text = store.read_text(encoding="utf-8")
