@@ -20,6 +20,7 @@ from ..domain.errors import (
 )
 from ..domain.models import DispatchSpec
 from ..store import StateStore
+from .agent import new_session
 from .output import console, emit_json, emit_jsonl, err_console, event, operation
 from .queue import queue_app, worker_app
 
@@ -38,6 +39,7 @@ app.add_typer(fleet_app, name="fleet")
 app.add_typer(state_app, name="state")
 app.add_typer(queue_app, name="queue")
 app.add_typer(worker_app, name="worker")
+app.command("new")(new_session)
 
 
 def _controller() -> JulesController:
