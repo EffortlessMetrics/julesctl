@@ -28,9 +28,10 @@ JULES_LIVE_TASK_BUDGET=3
 1. Fetch Discovery and record its digest.
 2. Authenticate.
 3. List and resolve the fixture source.
-4. List default and all-history sessions.
+4. Enumerate the session fleet through the documented unfiltered list endpoint.
 5. Read one session and its activities.
-6. Record supported filter syntax and error envelopes.
+6. Confirm that state, repository, age, and history projections remain client-side.
+7. Record the observed error envelopes without probing undocumented session filters.
 
 ### One source-backed lifecycle
 
