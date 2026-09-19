@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -305,3 +306,65 @@ def approve_command(
             console.print(result)
     except (JulesCtlError, ValueError) as exc:
         _fail("approve", exc, machine=json_output)
+
+
+def result_command(
+    session_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Return normalized session, activity, PR, patch, shell, and media evidence."""
+
+    try:
+        with JulesClient.from_env() as client:
+            result = client.result(session_id)
+        if json_output:
+            emit_json(operation("result", "completed", result))
+        else:
+            console.print(result)
+    except (JulesCtlError, ValueError) as exc:
+        _fail("result", exc, machine=json_output)
+
+
+def patch_command(
+    session_id: str,
+    index: Annotated[int, typer.Option("--index")] = -1,
+    output: Annotated[Path | None, typer.Option("--output", dir_okay=False)] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Emit one exact unified-diff artifact without Rich formatting."""
+
+    try:
+        with JulesClient.from_env() as client:
+            result = client.patch(session_id, index=index)
+        if json_output:
+            emit_json(operation("patch", "completed", result))
+            return
+        patch = result.get("unidiff_patch")
+        if not isinstance(patch, str):
+            raise ValueError("selected patch has no unidiff content")
+        if output is not None:
+            output.write_text(patch, encoding="utf-8")
+            return
+        sys.stdout.write(patch)
+        if patch and not patch.endswith("\n"):
+            sys.stdout.write("\n")
+    except (JulesCtlError, ValueError, OSError) as exc:
+        _fail("patch", exc, machine=json_output)
+
+
+def pull_request_command(
+    session_id: str,
+    index: Annotated[int, typer.Option("--index")] = -1,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Return one pull-request output from a Jules session."""
+
+    try:
+        with JulesClient.from_env() as client:
+            result = client.pull_request(session_id, index=index)
+        if json_output:
+            emit_json(operation("pr", "completed", result))
+        else:
+            console.print(result)
+    except (JulesCtlError, ValueError) as exc:
+        _fail("pr", exc, machine=json_output)

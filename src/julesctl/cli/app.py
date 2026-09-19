@@ -26,6 +26,9 @@ from .agent import (
     list_sessions_command,
     message_command,
     new_session,
+    patch_command,
+    pull_request_command,
+    result_command,
     show_session_command,
     watch_command,
 )
@@ -54,6 +57,9 @@ app.command("activities")(activities_command)
 app.command("watch")(watch_command)
 app.command("msg")(message_command)
 app.command("approve")(approve_command)
+app.command("result")(result_command)
+app.command("patch")(patch_command)
+app.command("pr")(pull_request_command)
 
 
 def _controller() -> JulesController:

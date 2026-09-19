@@ -56,6 +56,30 @@ class FakeClient:
     def approve_plan(self, session_id: str):
         return {"outcome": "completed", "session_id": session_id}
 
+    def result(self, session_id: str):
+        return {
+            "session": {"id": session_id},
+            "pull_requests": [{"url": "https://github.com/acme/repo/pull/1"}],
+            "patches": [{"unidiff_patch": "diff --git a/a b/a\n"}],
+            "bash_outputs": [],
+            "media": [],
+            "activities": [],
+        }
+
+    def patch(self, session_id: str, *, index: int = -1):
+        return {
+            "session_id": session_id,
+            "index": index,
+            "unidiff_patch": "diff --git a/a b/a\n",
+        }
+
+    def pull_request(self, session_id: str, *, index: int = -1):
+        return {
+            "session_id": session_id,
+            "index": index,
+            "url": "https://github.com/acme/repo/pull/1",
+        }
+
 
 def _fake(monkeypatch):
     client = FakeClient()
@@ -105,3 +129,25 @@ def test_show_and_approve_aliases(monkeypatch) -> None:
     approved = runner.invoke(app, ["approve", "1", "--json"])
     assert approved.exit_code == 0, approved.output
     assert json.loads(approved.stdout)["data"]["outcome"] == "completed"
+
+
+def test_result_patch_and_pr_commands(monkeypatch, tmp_path) -> None:
+    _fake(monkeypatch)
+
+    result = runner.invoke(app, ["result", "1", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["data"]["session"]["id"] == "1"
+
+    patch = runner.invoke(app, ["patch", "1"])
+    assert patch.exit_code == 0, patch.output
+    assert patch.stdout == "diff --git a/a b/a\n"
+
+    output = tmp_path / "change.diff"
+    saved = runner.invoke(app, ["patch", "1", "--output", str(output)])
+    assert saved.exit_code == 0, saved.output
+    assert saved.stdout == ""
+    assert output.read_text(encoding="utf-8") == "diff --git a/a b/a\n"
+
+    pr = runner.invoke(app, ["pr", "1", "--json"])
+    assert pr.exit_code == 0, pr.output
+    assert json.loads(pr.stdout)["data"]["url"].endswith("/pull/1")
