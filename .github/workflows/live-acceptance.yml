@@ -1,0 +1,68 @@
+name: Jules live acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: Live probe to run
+        required: true
+        default: read-only
+        type: choice
+        options:
+          - read-only
+          - repoless
+          - source
+      task_budget:
+        description: Maximum Jules task starts authorized for this run
+        required: true
+        default: "0"
+        type: string
+      test_repo:
+        description: Connected owner/repo for the source probe
+        required: false
+        type: string
+      test_branch:
+        description: Starting branch for the source probe
+        required: false
+        type: string
+
+concurrency:
+  group: jules-live-acceptance
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: jules-live
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev]'
+      - name: Select live probe
+        id: select
+        shell: bash
+        env:
+          PROBE: ${{ inputs.probe }}
+        run: |
+          case "$PROBE" in
+            read-only) echo 'expression=live_read_only_contract' >> "$GITHUB_OUTPUT" ;;
+            repoless)  echo 'expression=live_repoless_lifecycle' >> "$GITHUB_OUTPUT" ;;
+            source)    echo 'expression=live_source_lifecycle' >> "$GITHUB_OUTPUT" ;;
+            *) echo "unknown probe: $PROBE" >&2; exit 2 ;;
+          esac
+      - name: Run opt-in live probe
+        env:
+          JULES_LIVE_TEST: "1"
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          JULES_LIVE_TASK_BUDGET: ${{ inputs.task_budget }}
+          JULES_TEST_REPO: ${{ inputs.test_repo }}
+          JULES_TEST_BRANCH: ${{ inputs.test_branch }}
+        run: pytest -m live -k '${{ steps.select.outputs.expression }}' -vv
