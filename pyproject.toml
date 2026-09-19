@@ -26,7 +26,6 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 
-
 [project.urls]
 Homepage = "https://github.com/EffortlessMetrics/julesctl"
 Repository = "https://github.com/EffortlessMetrics/julesctl"
@@ -52,7 +51,7 @@ security = [
 ]
 release = [
   "build>=1.2,<2",
-  "twine>=6,<7",
+  "twine>=7,<8",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -81,3 +80,16 @@ testpaths = ["tests"]
 markers = [
   "live: opt-in tests that access the real Jules API and consume live account state",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["julesctl"]
+
+[tool.coverage.report]
+fail_under = 65
+show_missing = true
+skip_covered = false
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101"]
