@@ -66,17 +66,17 @@ jobs:
           if marker not in text:
               raise SystemExit("store constant marker not found")
           text = text.replace(marker, insertion, 1)
-          old_query = (
-              '            "SELECT COUNT(*) AS n FROM dispatch_attempts "\n'
-              '            "WHERE send_started_at >= datetime(\'now\',\'-24 hours\')"\n'
+          old_cutoff = "datetime('now','-24 hours')"
+          replacement = "{_ROLLING_24H_CUTOFF_SQL}"
+          if text.count(old_cutoff) != 2:
+              raise SystemExit(f"expected two rolling cutoffs, found {text.count(old_cutoff)}")
+          text = text.replace(
+              '"WHERE send_started_at >= datetime(\'now\',\'-24 hours\')"',
+              'f"WHERE send_started_at >= {_ROLLING_24H_CUTOFF_SQL}"',
           )
-          new_query = (
-              '            "SELECT COUNT(*) AS n FROM dispatch_attempts "\n'
-              '            f"WHERE send_started_at >= {_ROLLING_24H_CUTOFF_SQL}"\n'
-          )
-          if text.count(old_query) != 2:
-              raise SystemExit(f"expected two rolling-window queries, found {text.count(old_query)}")
-          store.write_text(text.replace(old_query, new_query), encoding="utf-8")
+          if replacement not in text:
+              raise SystemExit("rolling cutoff replacement missing")
+          store.write_text(text, encoding="utf-8")
 
           steering = Path("tests/test_steering.py")
           text = steering.read_text(encoding="utf-8")
