@@ -7,11 +7,12 @@ from dataclasses import dataclass
 
 from .api.client import JulesApiClient
 from .config import Settings
-from .domain.errors import ApiError, IndeterminateError, InputError
-from .domain.fingerprints import request_fingerprint, sha256_text, short_digest
+from .domain.errors import AdmissionError, ApiError, IndeterminateError, InputError
+from .domain.fingerprints import request_fingerprint, sha256_text
 from .domain.models import DispatchSpec, SessionWire
 from .domain.states import classify_state
 from .store import StateStore
+from .timestamps import GoogleTimestamp
 
 
 @dataclass(frozen=True)
@@ -26,19 +27,21 @@ class JulesController:
         self.ctx = context
 
     @classmethod
-    def from_settings(cls, settings: Settings, *, api: JulesApiClient | None = None) -> "JulesController":
+    def from_settings(
+        cls, settings: Settings, *, api: JulesApiClient | None = None
+    ) -> JulesController:
         client = api or JulesApiClient(settings.api_key, base_url=settings.base_url)
         return cls(ControllerContext(settings, client, StateStore(settings.database_path)))
 
     @classmethod
-    def from_env(cls) -> "JulesController":
+    def from_env(cls) -> JulesController:
         return cls.from_settings(Settings.from_env())
 
     def close(self) -> None:
         self.ctx.api.close()
         self.ctx.store.close()
 
-    def __enter__(self) -> "JulesController":
+    def __enter__(self) -> JulesController:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -63,7 +66,11 @@ class JulesController:
         context = session.source_context
         if not context:
             return None, None, None
-        start = context.github_repo_context.starting_branch if context.github_repo_context else None
+        start = (
+            context.github_repo_context.starting_branch
+            if context.github_repo_context
+            else None
+        )
         return context.source, start, context.working_branch
 
     def _remember_session(
@@ -82,7 +89,7 @@ class JulesController:
                 "session_id": session.id,
                 "session_name": session.name,
                 "origin": origin,
-                "raw_state": state.raw,
+                "raw_state": session.state,
                 "lifecycle": state.lifecycle,
                 "archived": session.archived,
                 "repo": repo,
@@ -90,7 +97,8 @@ class JulesController:
                 "starting_branch": start,
                 "working_branch": working,
                 "title": session.title,
-                "prompt_sha256": prompt_sha256 or (sha256_text(session.prompt) if session.prompt else None),
+                "prompt_sha256": prompt_sha256
+                or (sha256_text(session.prompt) if session.prompt else None),
                 "pr_url": pr["url"] if pr else None,
             }
         )
@@ -101,21 +109,30 @@ class JulesController:
 
     def resolve_source(self, repo: str) -> dict[str, object]:
         source = self.ctx.api.resolve_source(repo)
-        default = source.github_repo.default_branch.display_name if source.github_repo and source.github_repo.default_branch else None
+        default = (
+            source.github_repo.default_branch.display_name
+            if source.github_repo and source.github_repo.default_branch
+            else None
+        )
         return {"repo": repo, "source_name": source.name, "default_branch": default}
 
     def list_sessions(self, *, all_history: bool = False) -> list[dict[str, object]]:
         filter_value = "archived = true OR archived = false" if all_history else None
-        known = self.ctx.store.known_session_ids()
+        managed = self.ctx.store.managed_session_ids()
         result: list[dict[str, object]] = []
         sessions = list(self.ctx.api.iter_sessions(filter_value=filter_value))
+        seen_ids = {session.id for session in sessions}
         for session in sessions:
-            origin = "managed" if session.id in known else "external"
+            origin = "managed" if session.id in managed else "external"
             self._remember_session(session, origin=origin)
             result.append(self.normalize_session(session, origin=origin))
+        if not all_history:
+            self.ctx.store.reconcile_active_snapshot(seen_ids)
         return result
 
-    def normalize_session(self, session: SessionWire, *, origin: str = "unknown") -> dict[str, object]:
+    def normalize_session(
+        self, session: SessionWire, *, origin: str = "unknown"
+    ) -> dict[str, object]:
         state = classify_state(session.state)
         source, start, working = self._session_source(session)
         return {
@@ -136,6 +153,50 @@ class JulesController:
             "update_time": session.update_time,
         }
 
+    @staticmethod
+    def _spec_fingerprint(
+        *,
+        source_name: str | None,
+        starting_branch: str | None,
+        prompt_hash: str,
+        spec: DispatchSpec,
+    ) -> str:
+        return request_fingerprint(
+            {
+                "schema": 1,
+                "source_name": source_name,
+                "starting_branch": starting_branch,
+                "prompt_sha256": prompt_hash,
+                "title": spec.title,
+                "require_plan_approval": spec.require_plan_approval,
+                "automation_mode": (
+                    "AUTO_CREATE_PR"
+                    if spec.auto_create_pr
+                    else "AUTOMATION_MODE_UNSPECIFIED"
+                ),
+                "environment_variables_enabled": None,
+            }
+        )
+
+    @staticmethod
+    def _request_body(
+        *,
+        spec: DispatchSpec,
+        source_name: str | None,
+        starting_branch: str | None,
+    ) -> dict[str, object]:
+        body: dict[str, object] = {"prompt": spec.prompt, "title": spec.title}
+        if source_name:
+            body["sourceContext"] = {
+                "source": source_name,
+                "githubRepoContext": {"startingBranch": starting_branch},
+            }
+        if spec.require_plan_approval:
+            body["requirePlanApproval"] = True
+        if spec.auto_create_pr:
+            body["automationMode"] = "AUTO_CREATE_PR"
+        return body
+
     def dispatch(
         self,
         spec: DispatchSpec,
@@ -149,23 +210,20 @@ class JulesController:
             source_name = source.name
             if not starting_branch:
                 if not source.github_repo or not source.github_repo.default_branch:
-                    raise InputError("starting branch was not supplied and source has no default branch")
+                    raise InputError(
+                        "starting branch was not supplied and source has no default branch"
+                    )
                 starting_branch = source.github_repo.default_branch.display_name
         elif starting_branch:
             raise InputError("starting_branch requires repo")
 
         prompt_hash = sha256_text(spec.prompt)
-        fingerprint_data: dict[str, object] = {
-            "schema": 1,
-            "source_name": source_name,
-            "starting_branch": starting_branch,
-            "prompt_sha256": prompt_hash,
-            "title": spec.title,
-            "require_plan_approval": spec.require_plan_approval,
-            "automation_mode": "AUTO_CREATE_PR" if spec.auto_create_pr else "AUTOMATION_MODE_UNSPECIFIED",
-            "environment_variables_enabled": False,
-        }
-        fingerprint = request_fingerprint(fingerprint_data)
+        fingerprint = self._spec_fingerprint(
+            source_name=source_name,
+            starting_branch=starting_branch,
+            prompt_hash=prompt_hash,
+            spec=spec,
+        )
         existing = self.ctx.store.get_work(spec.dispatch_key)
         if existing is not None:
             if existing["fingerprint"] != fingerprint:
@@ -178,28 +236,68 @@ class JulesController:
                     "fingerprint": fingerprint,
                     "attempt_id": existing["attempt_id"],
                 }
+            attempt = self.ctx.store.get_attempt(str(existing["attempt_id"]))
+            if attempt is None:
+                raise InputError("dispatch work item has no attempt record")
+            if attempt["state"] == "RESERVED":
+                return self._send_reserved_attempt(
+                    spec,
+                    attempt_id=str(attempt["attempt_id"]),
+                    source_name=source_name,
+                    starting_branch=starting_branch,
+                    fingerprint=fingerprint,
+                    prompt_hash=prompt_hash,
+                    reconcile_delays=reconcile_delays,
+                )
+            if attempt["state"] == "CANCELLED_LOCAL":
+                raise AdmissionError("dispatch reservation was cancelled by fleet freeze")
+            if attempt["state"] == "DEFINITIVELY_REJECTED":
+                raise InputError(
+                    "previous dispatch attempt was definitively rejected; "
+                    "create an explicit new attempt before retrying"
+                )
             return self.reconcile_attempt(str(existing["attempt_id"]), delays=reconcile_delays)
 
-        # Refresh visible account occupancy before the transactional local reservation.
-        self.list_sessions(all_history=False)
+        remote_sessions = list(self.ctx.api.iter_sessions())
+        managed = self.ctx.store.managed_session_ids()
+        for session in remote_sessions:
+            origin = "managed" if session.id in managed else "external"
+            self._remember_session(session, origin=origin)
+        self.ctx.store.reconcile_active_snapshot({session.id for session in remote_sessions})
+
         attempt_id = str(uuid.uuid4())
-        working_branch = None
-        if spec.repo:
-            working_branch = (
-                f"julesctl/{short_digest(spec.dispatch_key, 12)}/{short_digest(attempt_id, 8)}"
-            )
+        request_body = self._request_body(
+            spec=spec,
+            source_name=source_name,
+            starting_branch=starting_branch,
+        )
+        request_hash = request_fingerprint(
+            {
+                "schema": 1,
+                "body": request_body,
+            }
+        )
         reservation = self.ctx.store.reserve_work(
             dispatch_key=spec.dispatch_key,
             fingerprint=fingerprint,
             attempt_id=attempt_id,
+            request_fingerprint=request_hash,
             attempt={
                 "source_name": source_name,
                 "repo": spec.repo,
                 "starting_branch": starting_branch,
-                "working_branch": working_branch,
+                "working_branch": None,
                 "title": spec.title,
                 "prompt_sha256": prompt_hash,
+                "require_plan_approval": spec.require_plan_approval,
+                "automation_mode": (
+                    "AUTO_CREATE_PR"
+                    if spec.auto_create_pr
+                    else "AUTOMATION_MODE_UNSPECIFIED"
+                ),
+                "environment_variables_enabled": None,
             },
+            baseline_session_ids=[session.id for session in remote_sessions],
             max_occupancy=self.ctx.settings.new_work_target,
             max_starts_24h=max(
                 self.ctx.settings.configured_rolling_start_limit
@@ -217,19 +315,37 @@ class JulesController:
                     "attempt_id": reservation["attempt_id"],
                 }
             return self.reconcile_attempt(str(reservation["attempt_id"]), delays=reconcile_delays)
-        body: dict[str, object] = {"prompt": spec.prompt, "title": spec.title}
-        if source_name:
-            body["sourceContext"] = {
-                "source": source_name,
-                "githubRepoContext": {"startingBranch": starting_branch},
-                "workingBranch": working_branch,
-                "environmentVariablesEnabled": False,
-            }
-        if spec.require_plan_approval:
-            body["requirePlanApproval"] = True
-        if spec.auto_create_pr:
-            body["automationMode"] = "AUTO_CREATE_PR"
 
+        return self._send_reserved_attempt(
+            spec,
+            attempt_id=attempt_id,
+            source_name=source_name,
+            starting_branch=starting_branch,
+            fingerprint=fingerprint,
+            prompt_hash=prompt_hash,
+            reconcile_delays=reconcile_delays,
+        )
+
+    def _send_reserved_attempt(
+        self,
+        spec: DispatchSpec,
+        *,
+        attempt_id: str,
+        source_name: str | None,
+        starting_branch: str | None,
+        fingerprint: str,
+        prompt_hash: str,
+        reconcile_delays: tuple[float, ...],
+    ) -> dict[str, object]:
+        self.ctx.store.begin_send(
+            attempt_id,
+            send_started_at=GoogleTimestamp.now().raw,
+        )
+        body = self._request_body(
+            spec=spec,
+            source_name=source_name,
+            starting_branch=starting_branch,
+        )
         try:
             session = self.ctx.api.create_session(body)
         except ApiError as exc:
@@ -253,17 +369,56 @@ class JulesController:
             return result
 
         self.ctx.store.bind_session(attempt_id, session.id, reconciled=False)
-        self._remember_session(session, origin="managed", repo=spec.repo, prompt_sha256=prompt_hash)
+        self._remember_session(
+            session,
+            origin="managed",
+            repo=spec.repo,
+            prompt_sha256=prompt_hash,
+        )
+        attempt = self.ctx.store.get_attempt(attempt_id)
         return {
             "outcome": "created",
             "session": self.normalize_session(session, origin="managed"),
             "dispatch_key": spec.dispatch_key,
             "fingerprint": fingerprint,
+            "request_fingerprint": attempt["request_fingerprint"] if attempt else None,
             "attempt_id": attempt_id,
         }
 
+    def _candidate_matches(self, attempt: object, session: SessionWire) -> bool:
+        source, start, working = self._session_source(session)
+        if source != attempt["source_name"]:
+            return False
+        if start != attempt["starting_branch"]:
+            return False
+        if attempt["working_branch"] is not None and working != attempt["working_branch"]:
+            return False
+        if session.title != attempt["title"]:
+            return False
+        if session.prompt is None or sha256_text(session.prompt) != attempt["prompt_sha256"]:
+            return False
+        if session.require_plan_approval is not None:
+            expected = bool(attempt["require_plan_approval"])
+            if session.require_plan_approval is not expected:
+                return False
+        if session.automation_mode is not None and session.automation_mode != attempt["automation_mode"]:
+            return False
+        sent_at = attempt["send_started_at"]
+        if sent_at and session.create_time:
+            try:
+                sent = GoogleTimestamp.parse(str(sent_at)).unix_nanoseconds
+                created = GoogleTimestamp.parse(session.create_time).unix_nanoseconds
+            except ValueError:
+                return False
+            if created < sent - 60_000_000_000:
+                return False
+        return True
+
     def reconcile_attempt(
-        self, attempt_id: str, *, delays: tuple[float, ...] = (0.0, 1.0, 2.0, 4.0, 8.0)
+        self,
+        attempt_id: str,
+        *,
+        delays: tuple[float, ...] = (0.0, 1.0, 2.0, 4.0, 8.0),
     ) -> dict[str, object]:
         attempt = self.ctx.store.get_attempt(attempt_id)
         if not attempt:
@@ -273,26 +428,27 @@ class JulesController:
                 "outcome": "existing",
                 "session_id": attempt["session_id"],
                 "attempt_id": attempt_id,
-                "fingerprint": attempt["fingerprint"],
+                "request_fingerprint": attempt["request_fingerprint"],
             }
+        if attempt["state"] == "RESERVED":
+            raise InputError("reserved attempt has not begun network transmission")
+        baseline = set(json.loads(attempt["baseline_session_ids_json"] or "[]"))
         candidates: list[SessionWire] = []
         for delay in delays:
             if delay:
                 time.sleep(delay)
             candidates = []
-            for session in self.ctx.api.iter_sessions():
-                source, start, working = self._session_source(session)
-                if attempt["working_branch"] and working and working != attempt["working_branch"]:
+            for listed in self.ctx.api.iter_sessions():
+                if listed.id in baseline:
                     continue
-                if attempt["source_name"] and source != attempt["source_name"]:
-                    continue
-                if attempt["starting_branch"] and start and start != attempt["starting_branch"]:
-                    continue
-                if session.title and session.title != attempt["title"]:
-                    continue
-                if session.prompt and sha256_text(session.prompt) != attempt["prompt_sha256"]:
-                    continue
-                candidates.append(session)
+                try:
+                    session = self.ctx.api.get_session(listed.id)
+                except ApiError as exc:
+                    if exc.http_status == 404:
+                        continue
+                    raise
+                if self._candidate_matches(attempt, session):
+                    candidates.append(session)
             if len(candidates) == 1:
                 session = candidates[0]
                 self.ctx.store.bind_session(attempt_id, session.id, reconciled=True)
@@ -306,7 +462,7 @@ class JulesController:
                     "outcome": "reconciled",
                     "session": self.normalize_session(session, origin="managed"),
                     "attempt_id": attempt_id,
-                    "fingerprint": attempt["fingerprint"],
+                    "request_fingerprint": attempt["request_fingerprint"],
                 }
             if len(candidates) > 1:
                 break
@@ -319,9 +475,11 @@ class JulesController:
 
     def reconcile(self) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
-        known = self.ctx.store.known_session_ids()
-        for session in self.ctx.api.iter_sessions():
-            origin = "managed" if session.id in known else "external"
+        managed = self.ctx.store.managed_session_ids()
+        sessions = list(self.ctx.api.iter_sessions())
+        self.ctx.store.reconcile_active_snapshot({session.id for session in sessions})
+        for session in sessions:
+            origin = "managed" if session.id in managed else "external"
             self._remember_session(session, origin=origin)
             for activity in self.ctx.api.iter_activities(session.id):
                 payload = json.dumps(
@@ -354,13 +512,18 @@ class JulesController:
 
     def session_result(self, session_id: str) -> dict[str, object]:
         session = self.ctx.api.get_session(session_id)
-        self._remember_session(session, origin="managed" if session.id in self.ctx.store.known_session_ids() else "external")
+        origin = (
+            "managed"
+            if session.id in self.ctx.store.managed_session_ids()
+            else "external"
+        )
+        self._remember_session(session, origin=origin)
         activities = [
             activity.model_dump(by_alias=True, exclude_none=True)
             for activity in self.ctx.api.iter_activities(session.id)
         ]
         return {
-            "session": self.normalize_session(session),
+            "session": self.normalize_session(session, origin=origin),
             "activities": activities,
         }
 
@@ -370,13 +533,18 @@ class JulesController:
             {
                 "session_id": row["session_id"],
                 "snapshot_state": row["raw_state"],
-                "snapshot_archived": bool(row["archived"]) if row["archived"] is not None else None,
+                "snapshot_archived": (
+                    bool(row["archived"]) if row["archived"] is not None else None
+                ),
             }
             for row in self.ctx.store.active_rows()
             if row["lifecycle"] != "unknown"
         ]
         plan_id = "drain_" + uuid.uuid4().hex[:16]
-        selector = {"lifecycles": ["executing", "actionable", "paused"], "include_unknown": False}
+        selector = {
+            "lifecycles": ["executing", "actionable", "paused"],
+            "include_unknown": False,
+        }
         self.ctx.store.create_deletion_plan(plan_id, selector, targets)
         return {"plan_id": plan_id, "selector": selector, "targets": targets}
 
@@ -395,7 +563,9 @@ class JulesController:
                 else:
                     already_absent += 1
             except ApiError as exc:
-                failed.append({"session_id": sid, "status": exc.http_status, "error": str(exc)})
+                failed.append(
+                    {"session_id": sid, "status": exc.http_status, "error": str(exc)}
+                )
         return {
             "plan_id": plan_id,
             "deleted": deleted,
@@ -412,9 +582,14 @@ class JulesController:
             lifecycle = row["lifecycle"]
             if lifecycle in counts:
                 counts[lifecycle] += 1
-        occupied = sum(counts.values())
+        unresolved = self.ctx.store.unresolved_attempt_count()
+        occupied = sum(counts.values()) + unresolved
         return {
-            "observed": {**counts, "conservative_occupancy": occupied},
+            "observed": {
+                **counts,
+                "unresolved_attempts": unresolved,
+                "conservative_occupancy": occupied,
+            },
             "configured_limits": {
                 "concurrency": self.ctx.settings.configured_concurrency_limit,
                 "rolling_24h_starts": self.ctx.settings.configured_rolling_start_limit,
@@ -423,6 +598,8 @@ class JulesController:
                 "rolling_start_reserve": self.ctx.settings.rolling_start_reserve,
             },
             "managed_starts_rolling_24h": self.ctx.store.starts_last_24h(),
-            "available_new_work_slots": max(self.ctx.settings.new_work_target - occupied, 0),
+            "available_new_work_slots": max(
+                self.ctx.settings.new_work_target - occupied, 0
+            ),
             "coverage": "best_effort",
         }
