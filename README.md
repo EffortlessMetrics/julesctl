@@ -18,7 +18,7 @@ python -m venv .venv
 pip install -e '.[dev]'
 ```
 
-Set the credential only in the environment:
+Set the credential only in the environment of trusted direct operations or the credentialed worker:
 
 ```bash
 export JULES_API_KEY='...'
@@ -47,6 +47,27 @@ julesctl fleet freeze --json
 julesctl fleet drain --json
 julesctl fleet drain --apply PLAN_ID --yes --json
 ```
+
+## Credential-isolated automation
+
+Candidate producers do not need `JULES_API_KEY`:
+
+```bash
+julesctl queue submit --spec task.json --json
+julesctl queue status --json
+```
+
+One trusted worker process receives the key and a repository allowlist:
+
+```bash
+JULES_API_KEY='...' \
+  julesctl worker run-once \
+  --max 5 \
+  --allow-repo EffortlessMetrics/perl-lsp \
+  --jsonl
+```
+
+The worker claims a bounded batch transactionally, applies repository policy, and preserves one result per candidate. A frozen fleet prevents new claims and dispatches.
 
 A machine dispatch packet looks like:
 
