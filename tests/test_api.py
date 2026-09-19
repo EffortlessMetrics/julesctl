@@ -16,9 +16,7 @@ def test_redirect_is_treated_as_failed_api_response() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"Location": "https://other.test/sessions"})
 
-    client = JulesApiClient(
-        "k", base_url="https://test", transport=httpx.MockTransport(handler)
-    )
+    client = JulesApiClient("k", base_url="https://test", transport=httpx.MockTransport(handler))
     try:
         with pytest.raises(ApiError, match="HTTP 302"):
             list(client.iter_sessions())
@@ -49,9 +47,7 @@ def test_pagination_crosses_empty_page_and_deduplicates() -> None:
             },
         )
 
-    client = JulesApiClient(
-        "k", base_url="https://test", transport=httpx.MockTransport(handler)
-    )
+    client = JulesApiClient("k", base_url="https://test", transport=httpx.MockTransport(handler))
     try:
         assert [session.id for session in client.iter_sessions()] == ["1", "2"]
     finally:
@@ -62,9 +58,7 @@ def test_repeated_page_token_fails_closed() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"sessions": [], "nextPageToken": "same"})
 
-    client = JulesApiClient(
-        "k", base_url="https://test", transport=httpx.MockTransport(handler)
-    )
+    client = JulesApiClient("k", base_url="https://test", transport=httpx.MockTransport(handler))
     try:
         with pytest.raises(ApiError, match="repeated nextPageToken"):
             list(client.iter_sessions())
@@ -84,9 +78,7 @@ def test_unknown_output_fields_are_retained() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=json.dumps(payload))
 
-    client = JulesApiClient(
-        "k", base_url="https://test", transport=httpx.MockTransport(handler)
-    )
+    client = JulesApiClient("k", base_url="https://test", transport=httpx.MockTransport(handler))
     try:
         session = client.get_session("1")
         assert session.state == "FUTURE_STATE"

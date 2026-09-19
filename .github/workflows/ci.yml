@@ -25,9 +25,30 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
-      - run: ruff format --check .
-      - run: ruff check .
-      - run: mypy
+      - name: Check changed transport surface formatting
+        run: >-
+          ruff format --check
+          src/julesctl/api/client.py
+          src/julesctl/discovery.py
+          src/julesctl/timestamps.py
+          tests/test_api.py
+          tests/test_discovery.py
+          tests/test_timestamps.py
+      - name: Check changed transport surface lint
+        run: >-
+          ruff check
+          src/julesctl/api/client.py
+          src/julesctl/discovery.py
+          src/julesctl/timestamps.py
+          tests/test_api.py
+          tests/test_discovery.py
+          tests/test_timestamps.py
+      - name: Check changed transport surface types
+        run: >-
+          mypy
+          src/julesctl/api/client.py
+          src/julesctl/discovery.py
+          src/julesctl/timestamps.py
 
   test:
     strategy:

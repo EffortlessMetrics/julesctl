@@ -34,8 +34,5 @@ class GoogleTimestamp:
     def now(cls) -> GoogleTimestamp:
         dt = datetime.now(UTC)
         delta = dt - _EPOCH
-        ns = (
-            (delta.days * 86_400 + delta.seconds) * 1_000_000_000
-            + delta.microseconds * 1_000
-        )
+        ns = (delta.days * 86_400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1_000
         return cls(ns, dt.isoformat().replace("+00:00", "Z"))
