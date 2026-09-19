@@ -150,3 +150,158 @@ def new_session(
         raise
     except (JulesCtlError, ValueError) as exc:
         _fail("new", exc, machine=machine)
+
+
+def list_sessions_command(
+    state: Annotated[list[str] | None, typer.Option("--state")] = None,
+    repo: Annotated[str | None, typer.Option("--repo")] = None,
+    since: Annotated[str | None, typer.Option("--since")] = None,
+    older_than: Annotated[str | None, typer.Option("--older-than")] = None,
+    active: Annotated[bool, typer.Option("--active")] = False,
+    nonterminal: Annotated[bool, typer.Option("--nonterminal")] = False,
+    all_history: Annotated[bool, typer.Option("--all-history")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+    jsonl: Annotated[bool, typer.Option("--jsonl")] = False,
+) -> None:
+    """List the complete session fleet and apply filters locally."""
+
+    machine = json_output or jsonl
+    try:
+        if json_output and jsonl:
+            raise ValueError("--json and --jsonl are mutually exclusive")
+        with JulesClient.from_env() as client:
+            items = client.list_sessions(
+                all_history=all_history,
+                states=state,
+                repo=repo,
+                since=since,
+                older_than=older_than,
+                active=active,
+                nonterminal=nonterminal,
+            )
+        if jsonl:
+            emit_jsonl([{**item, "schema": "julesctl.session.v1"} for item in items])
+        elif json_output:
+            emit_json(operation("ls", "completed", {"items": items}))
+        else:
+            for item in items:
+                console.print(f"{item['id']}\t{item['raw_state']}\t{item.get('title') or ''}")
+    except (JulesCtlError, ValueError) as exc:
+        _fail("ls", exc, machine=machine)
+
+
+def show_session_command(
+    session_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        with JulesClient.from_env() as client:
+            result = client.get_session(session_id)
+        if json_output:
+            emit_json(operation("show", "completed", result))
+        else:
+            console.print(result)
+    except (JulesCtlError, ValueError) as exc:
+        _fail("show", exc, machine=json_output)
+
+
+def activities_command(
+    session_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+    jsonl: Annotated[bool, typer.Option("--jsonl")] = False,
+) -> None:
+    machine = json_output or jsonl
+    try:
+        if json_output and jsonl:
+            raise ValueError("--json and --jsonl are mutually exclusive")
+        with JulesClient.from_env() as client:
+            items = [
+                activity.model_dump(by_alias=True, exclude_none=True)
+                for activity in client.iter_activities(session_id)
+            ]
+        if jsonl:
+            emit_jsonl(
+                [
+                    {**item, "schema": "julesctl.activity.v1", "session_id": session_id}
+                    for item in items
+                ]
+            )
+        elif json_output:
+            emit_json(operation("activities", "completed", {"items": items}))
+        else:
+            for item in items:
+                console.print(item)
+    except (JulesCtlError, ValueError) as exc:
+        _fail("activities", exc, machine=machine)
+
+
+def watch_command(
+    session_id: str,
+    poll_interval: Annotated[float, typer.Option("--poll-interval", min=0)] = 3.0,
+    settle: Annotated[float, typer.Option("--settle", min=0)] = 1.0,
+    timeout: Annotated[float | None, typer.Option("--timeout", min=0.001)] = None,
+    max_polls: Annotated[int | None, typer.Option("--max-polls", min=1)] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+    jsonl: Annotated[bool, typer.Option("--jsonl")] = False,
+) -> None:
+    machine = json_output or jsonl
+    try:
+        if json_output and jsonl:
+            raise ValueError("--json and --jsonl are mutually exclusive")
+        with JulesClient.from_env() as client:
+            events = client.watch(
+                session_id,
+                poll_interval_seconds=poll_interval,
+                settle_seconds=settle,
+                timeout_seconds=timeout,
+                max_polls=max_polls,
+            )
+            if jsonl:
+                for item in events:
+                    emit_json({**item, "schema": "julesctl.event.v1"})
+                return
+            collected = []
+            for item in events:
+                collected.append(item)
+                if not json_output:
+                    console.print(item)
+        if json_output:
+            emit_json(operation("watch", "completed", {"items": collected}))
+    except (JulesCtlError, ValueError) as exc:
+        _fail("watch", exc, machine=machine)
+
+
+def message_command(
+    session_id: str,
+    prompt: Annotated[str | None, typer.Argument(help="Message text, or '-' for stdin")] = None,
+    file: Annotated[
+        Path | None,
+        typer.Option("--file", exists=True, dir_okay=False, readable=True),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        message = read_prompt(prompt, file=file)
+        with JulesClient.from_env() as client:
+            result = client.send_message(session_id, message)
+        if json_output:
+            emit_json(operation("msg", str(result["outcome"]), result))
+        else:
+            console.print(result)
+    except (JulesCtlError, ValueError) as exc:
+        _fail("msg", exc, machine=json_output)
+
+
+def approve_command(
+    session_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        with JulesClient.from_env() as client:
+            result = client.approve_plan(session_id)
+        if json_output:
+            emit_json(operation("approve", str(result["outcome"]), result))
+        else:
+            console.print(result)
+    except (JulesCtlError, ValueError) as exc:
+        _fail("approve", exc, machine=json_output)
