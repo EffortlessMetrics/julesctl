@@ -30,12 +30,13 @@ jobs:
           ruff check --fix .
           mypy
           pytest --cov=julesctl --cov-branch --cov-fail-under=65
-      - name: Commit verified implementation
+      - name: Commit verified non-workflow changes
         shell: bash
         run: |
-          git rm .github/phase21.url.b64 .github/workflows/temporary-release-security-lock.yml
+          git restore --source=HEAD -- .github/workflows/ci.yml
+          rm -f .github/dependabot.yml .github/workflows/release-build.yml .github/workflows/security.yml
           git config user.name EffortlessSteven
           git config user.email 15812269+EffortlessSteven@users.noreply.github.com
-          git add -A
-          git commit -m 'chore: lock release and security evidence'
+          git add pyproject.toml src tests
+          git commit -m 'chore: lock packaging and machine error contracts'
           git push origin HEAD:${{ github.ref_name }}
