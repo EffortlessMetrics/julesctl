@@ -73,7 +73,7 @@ def test_approval_lost_response_reconciles_from_new_activity() -> None:
             posted = True
             return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
         if request.url.path.endswith("/sessions/1"):
-            state = "IN_PROGRESS" if posted else "AWAITING_PLAN_APPROVAL"
+            state = "AWAITING_PLAN_APPROVAL"
             return httpx.Response(200, json={"name": "sessions/1", "id": "1", "state": state})
         activities = [{"name": "sessions/1/activities/plan", "id": "plan", "planGenerated": {}}]
         if posted:
@@ -155,5 +155,45 @@ def test_archive_is_noop_when_already_archived() -> None:
         result = archive_once(api, "1")
         assert result["outcome"] == "existing"
         assert posts == 0
+    finally:
+        api.close()
+
+
+def test_approval_lost_response_reconciles_from_state_transition_only() -> None:
+    posted = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal posted
+        if request.method == "POST":
+            posted = True
+            return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
+        if request.url.path.endswith("/sessions/1"):
+            state = "IN_PROGRESS" if posted else "AWAITING_PLAN_APPROVAL"
+            return httpx.Response(
+                200,
+                json={"name": "sessions/1", "id": "1", "state": state},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "activities": [
+                    {
+                        "name": "sessions/1/activities/plan",
+                        "id": "plan",
+                        "planGenerated": {},
+                    }
+                ]
+            },
+        )
+
+    api = JulesApiClient(
+        "k",
+        base_url="https://test",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = approve_once(api, "1")
+        assert result["outcome"] == "reconciled"
+        assert result["observed_state"] == "IN_PROGRESS"
     finally:
         api.close()

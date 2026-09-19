@@ -30,7 +30,7 @@ def operation(
 
 
 def event(value: dict[str, Any]) -> dict[str, Any]:
-    return {"schema": "julesctl.event.v1", **value}
+    return {**value, "schema": "julesctl.event.v1"}
 
 
 def emit_json(value: object) -> None:

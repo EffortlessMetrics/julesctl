@@ -17,6 +17,8 @@ _UNRESOLVED_ATTEMPT_STATES = (
     "INDETERMINATE_MULTIPLE",
 )
 
+_ROLLING_24H_CUTOFF_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now','-24 hours')"
+
 _SCHEMA_VERSION = 1
 
 _SCHEMA = """
@@ -227,7 +229,7 @@ class StateStore:
     def starts_last_24h(self) -> int:
         row = self._conn.execute(
             "SELECT COUNT(*) AS n FROM dispatch_attempts "
-            "WHERE send_started_at >= datetime('now','-24 hours')"
+            f"WHERE send_started_at >= {_ROLLING_24H_CUTOFF_SQL}"
         ).fetchone()
         return int(row["n"] if row else 0)
 
@@ -281,7 +283,7 @@ class StateStore:
             if max_starts_24h is not None:
                 recent = conn.execute(
                     "SELECT COUNT(*) AS n FROM dispatch_attempts "
-                    "WHERE send_started_at >= datetime('now','-24 hours')"
+                    f"WHERE send_started_at >= {_ROLLING_24H_CUTOFF_SQL}"
                 ).fetchone()
                 starts = int(recent["n"] if recent else 0)
                 if starts >= max_starts_24h:
