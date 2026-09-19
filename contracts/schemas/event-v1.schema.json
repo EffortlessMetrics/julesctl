@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://effortlessmetrics.dev/julesctl/event-v1.schema.json",
+  "title": "julesctl event v1",
+  "type": "object",
+  "required": ["schema", "type", "session_id"],
+  "properties": {
+    "schema": {"const": "julesctl.event.v1"},
+    "type": {"type": "string", "minLength": 1},
+    "session_id": {"type": "string", "minLength": 1},
+    "activity_id": {"type": ["string", "null"]},
+    "activity_name": {"type": ["string", "null"]},
+    "create_time": {"type": ["string", "null"]},
+    "origin": {"type": "string"}
+  },
+  "additionalProperties": true
+}
