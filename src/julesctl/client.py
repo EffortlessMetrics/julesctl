@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 
+from .application.artifacts import collect_artifacts, select_patch, select_pull_request
 from .application.sessions import filter_sessions
 from .application.steering import approve_once, message_once
 from .application.watch import watch_session
@@ -136,7 +137,32 @@ class JulesClient:
         return removed
 
     def result(self, session_id: str) -> dict[str, object]:
-        return self._controller.session_result(session_id)
+        session = self._controller.ctx.api.get_session(session_id)
+        activities = list(self._controller.ctx.api.iter_activities(session.id))
+        origin = (
+            "managed"
+            if session.id in self._controller.ctx.store.managed_session_ids()
+            else "external"
+        )
+        self._controller._remember_session(session, origin=origin)
+        return {
+            "session": self._controller.normalize_session(session, origin=origin),
+            **collect_artifacts(session, activities),
+            "activities": [
+                activity.model_dump(by_alias=True, exclude_none=True) for activity in activities
+            ],
+        }
+
+    def patch(self, session_id: str, *, index: int = -1) -> dict[str, object]:
+        return select_patch(self.result(session_id), index=index)
+
+    def pull_request(
+        self,
+        session_id: str,
+        *,
+        index: int = -1,
+    ) -> dict[str, object]:
+        return select_pull_request(self.result(session_id), index=index)
 
     def resolve_source(self, repo: str) -> dict[str, object]:
         return self._controller.resolve_source(repo)
