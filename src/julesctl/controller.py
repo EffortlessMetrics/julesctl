@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass
 
 from .api.client import JulesApiClient
+from .application.reconcile import reconcile_session_activities
 from .config import Settings
 from .domain.errors import AdmissionError, ApiError, IndeterminateError, InputError
 from .domain.fingerprints import request_fingerprint, sha256_text
@@ -477,33 +478,14 @@ class JulesController:
         for session in sessions:
             origin = "managed" if session.id in managed else "external"
             self._remember_session(session, origin=origin)
-            for activity in self.ctx.api.iter_activities(session.id):
-                payload = json.dumps(
-                    activity.model_dump(by_alias=True, exclude_none=True),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                    default=str,
+            events.extend(
+                reconcile_session_activities(
+                    self.ctx.api,
+                    self.ctx.store,
+                    session.id,
+                    origin=origin,
                 )
-                is_new = self.ctx.store.record_activity(
-                    session_id=session.id,
-                    activity_name=activity.name,
-                    activity_id=activity.id,
-                    create_time=activity.create_time,
-                    event_type=activity.event_type(),
-                    payload_sha256=sha256_text(payload),
-                )
-                if is_new:
-                    events.append(
-                        {
-                            "type": activity.event_type(),
-                            "session_id": session.id,
-                            "activity_id": activity.id,
-                            "activity_name": activity.name,
-                            "create_time": activity.create_time,
-                            "origin": origin,
-                        }
-                    )
+            )
         return events
 
     def session_result(self, session_id: str) -> dict[str, object]:
