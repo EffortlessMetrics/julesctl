@@ -110,12 +110,8 @@ class StateStore:
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
-        self._conn.execute(
-            "INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_frozen','0')"
-        )
-        self._conn.execute(
-            "INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_generation','0')"
-        )
+        self._conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_frozen','0')")
+        self._conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_generation','0')")
 
     def close(self) -> None:
         self._conn.close()
@@ -359,8 +355,7 @@ class StateStore:
             if not row:
                 raise InputError(f"unknown attempt {attempt_id}")
             conflict = conn.execute(
-                "SELECT attempt_id FROM dispatch_attempts "
-                "WHERE session_id=? AND attempt_id<>?",
+                "SELECT attempt_id FROM dispatch_attempts WHERE session_id=? AND attempt_id<>?",
                 (session_id, attempt_id),
             ).fetchone()
             if conflict:
@@ -484,9 +479,7 @@ class StateStore:
             (plan_id, json.dumps(selector, sort_keys=True), json.dumps(targets), "PLANNED"),
         )
 
-    def get_deletion_plan(
-        self, plan_id: str
-    ) -> tuple[dict[str, object], list[dict[str, object]]]:
+    def get_deletion_plan(self, plan_id: str) -> tuple[dict[str, object], list[dict[str, object]]]:
         row = self._conn.execute(
             "SELECT selector_json,targets_json FROM deletion_plans WHERE plan_id=?", (plan_id,)
         ).fetchone()
