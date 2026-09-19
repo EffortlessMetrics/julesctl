@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import ClassVar
 
 from typer.testing import CliRunner
 
@@ -11,7 +12,7 @@ runner = CliRunner()
 
 
 class FakeClient:
-    calls: list[object] = []
+    calls: ClassVar[list[object]] = []
 
     def __enter__(self):
         return self
