@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 
 from ..application.steering import approve_once, archive_once, message_once, unarchive_once
-from ..config import Settings, default_database_path
+from ..config import Settings, default_database_path, profile_name
 from ..controller import JulesController
 from ..discovery import fetch_discovery
 from ..domain.errors import (
@@ -28,11 +28,13 @@ api_app = typer.Typer(help="Jules API contract diagnostics")
 source_app = typer.Typer(help="Jules sources")
 session_app = typer.Typer(help="Jules sessions")
 fleet_app = typer.Typer(help="Account fleet control")
+state_app = typer.Typer(help="Local controller state")
 app.add_typer(auth_app, name="auth")
 app.add_typer(api_app, name="api")
 app.add_typer(source_app, name="source")
 app.add_typer(session_app, name="session")
 app.add_typer(fleet_app, name="fleet")
+app.add_typer(state_app, name="state")
 
 
 def _controller() -> JulesController:
@@ -447,6 +449,32 @@ def reconcile(jsonl: Annotated[bool, typer.Option("--jsonl")] = False) -> None:
         _error("reconcile", exc, machine=jsonl)
 
 
+@state_app.command("check")
+def state_check(
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        selected_profile = profile_name()
+        path = default_database_path(selected_profile)
+        store = StateStore(path, profile_name=selected_profile)
+        try:
+            result = {
+                "profile": selected_profile,
+                "path": str(path),
+                "schema_version": store.schema_version(),
+                "integrity": store.integrity_check(),
+                "unresolved_attempts": store.unresolved_attempt_count(),
+            }
+        finally:
+            store.close()
+        if json_output:
+            emit_json(operation("state.check", "completed", result))
+        else:
+            console.print(result)
+    except (JulesCtlError, ValueError) as exc:
+        _error("state.check", exc, machine=json_output)
+
+
 @fleet_app.command("status")
 def fleet_status(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
     try:
@@ -463,7 +491,11 @@ def fleet_status(json_output: Annotated[bool, typer.Option("--json")] = False) -
 @fleet_app.command("freeze")
 def fleet_freeze(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
     try:
-        store = StateStore(default_database_path())
+        selected_profile = profile_name()
+        store = StateStore(
+            default_database_path(selected_profile),
+            profile_name=selected_profile,
+        )
         try:
             generation = store.set_frozen(True)
         finally:
@@ -480,7 +512,11 @@ def fleet_freeze(json_output: Annotated[bool, typer.Option("--json")] = False) -
 @fleet_app.command("unfreeze")
 def fleet_unfreeze(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
     try:
-        store = StateStore(default_database_path())
+        selected_profile = profile_name()
+        store = StateStore(
+            default_database_path(selected_profile),
+            profile_name=selected_profile,
+        )
         try:
             generation = store.set_frozen(False)
         finally:

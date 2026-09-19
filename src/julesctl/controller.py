@@ -33,7 +33,11 @@ class JulesController:
         cls, settings: Settings, *, api: JulesApiClient | None = None
     ) -> JulesController:
         client = api or JulesApiClient(settings.api_key, base_url=settings.base_url)
-        return cls(ControllerContext(settings, client, StateStore(settings.database_path)))
+        return cls(
+            ControllerContext(
+                settings, client, StateStore(settings.database_path, profile_name=settings.profile)
+            )
+        )
 
     @classmethod
     def from_env(cls) -> JulesController:
