@@ -41,7 +41,6 @@ def _session_payload() -> dict[str, object]:
         "title": "Fix parser",
         "prompt": "do it",
         "state": "IN_PROGRESS",
-        "createTime": "2026-09-19T01:00:00Z",
         "sourceContext": {
             "source": "sources/github/acme/repo",
             "githubRepoContext": {"startingBranch": "main"},
