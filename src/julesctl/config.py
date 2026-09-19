@@ -22,7 +22,9 @@ def state_root() -> Path:
         return Path(base or Path.home() / "AppData" / "Local") / "julesctl"
     if system == "Darwin":
         return Path.home() / "Library" / "Application Support" / "julesctl"
-    return Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "julesctl"
+    return (
+        Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "julesctl"
+    )
 
 
 def profile_name() -> str:

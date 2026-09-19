@@ -8,7 +8,9 @@ from julesctl.domain.errors import InputError
 from julesctl.store import StateStore
 
 
-def test_profiles_have_distinct_state_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_profiles_have_distinct_state_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("JULESCTL_HOME", str(tmp_path))
     assert default_database_path("default") == tmp_path / "state.db"
     assert default_database_path("automation") == tmp_path / "profiles" / "automation" / "state.db"

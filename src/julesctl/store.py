@@ -4,6 +4,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .domain.errors import AdmissionError, InputError
@@ -15,6 +16,8 @@ _UNRESOLVED_ATTEMPT_STATES = (
     "INDETERMINATE_NONE",
     "INDETERMINATE_MULTIPLE",
 )
+
+_SCHEMA_VERSION = 1
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -106,17 +109,55 @@ CREATE INDEX IF NOT EXISTS idx_attempts_started ON dispatch_attempts(send_starte
 
 
 class StateStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, profile_name: str = "default") -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        existed = path.exists() and path.stat().st_size > 0
         self._conn = sqlite3.connect(path, timeout=5, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute("PRAGMA busy_timeout=5000")
+        current_version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+        if current_version > _SCHEMA_VERSION:
+            self._conn.close()
+            raise InputError(
+                f"state database schema {current_version} is newer than supported "
+                f"schema {_SCHEMA_VERSION}"
+            )
+        if current_version < _SCHEMA_VERSION and existed:
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = path.with_name(f"{path.stem}.bak-v{current_version}-{stamp}{path.suffix}")
+            backup = sqlite3.connect(backup_path)
+            try:
+                self._conn.backup(backup)
+            finally:
+                backup.close()
         self._conn.executescript(_SCHEMA)
+        if current_version < _SCHEMA_VERSION:
+            self._conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+        stored_profile = self._conn.execute(
+            "SELECT value FROM meta WHERE key='profile_name'"
+        ).fetchone()
+        if stored_profile is None:
+            self._conn.execute(
+                "INSERT INTO meta(key,value) VALUES('profile_name',?)",
+                (profile_name,),
+            )
+        elif str(stored_profile["value"]) != profile_name:
+            self._conn.close()
+            raise InputError(
+                f"state database belongs to profile {stored_profile['value']!r}, "
+                f"not {profile_name!r}"
+            )
         self._conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_frozen','0')")
         self._conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_generation','0')")
+
+    def schema_version(self) -> int:
+        return int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+
+    def integrity_check(self) -> list[str]:
+        return [str(row[0]) for row in self._conn.execute("PRAGMA integrity_check")]
 
     def close(self) -> None:
         self._conn.close()
