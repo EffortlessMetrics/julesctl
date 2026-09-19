@@ -25,6 +25,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
           output = Path("src/julesctl/cli/output.py")
           text = output.read_text(encoding="utf-8")
@@ -36,17 +37,23 @@ jobs:
 
           config = Path("src/julesctl/config.py")
           text = config.read_text(encoding="utf-8")
-          old = '''    return (
-              Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "julesctl"
-          )
-          '''
-          new = '''    xdg_state_home = os.environ.get("XDG_STATE_HOME") or str(
-              Path.home() / ".local" / "state"
-          )
-          return Path(xdg_state_home).expanduser() / "julesctl"
-          '''
+          old = dedent(
+              '''
+                  return (
+                      Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "julesctl"
+                  )
+              '''
+          ).lstrip("\n")
+          new = dedent(
+              '''
+                  xdg_state_home = os.environ.get("XDG_STATE_HOME") or str(
+                      Path.home() / ".local" / "state"
+                  )
+                  return Path(xdg_state_home).expanduser() / "julesctl"
+              '''
+          ).lstrip("\n")
           if old not in text:
-              raise SystemExit("XDG state marker not found")
+              raise SystemExit(f"XDG state marker not found:\n{old!r}")
           config.write_text(text.replace(old, new, 1), encoding="utf-8")
 
           store = Path("src/julesctl/store.py")
@@ -70,8 +77,7 @@ jobs:
           )
           if text.count(old_query) != 2:
               raise SystemExit(f"expected two rolling-window queries, found {text.count(old_query)}")
-          text = text.replace(old_query, new_query)
-          store.write_text(text, encoding="utf-8")
+          store.write_text(text.replace(old_query, new_query), encoding="utf-8")
 
           steering = Path("tests/test_steering.py")
           text = steering.read_text(encoding="utf-8")
@@ -80,140 +86,145 @@ jobs:
           if old not in text:
               raise SystemExit("approval activity test marker not found")
           text = text.replace(old, new, 1)
-          extra = '''
+          extra = dedent(
+              '''
 
-          def test_approval_lost_response_reconciles_from_state_transition_only() -> None:
-              posted = False
+              def test_approval_lost_response_reconciles_from_state_transition_only() -> None:
+                  posted = False
 
-              def handler(request: httpx.Request) -> httpx.Response:
-                  nonlocal posted
-                  if request.method == "POST":
-                      posted = True
-                      return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
-                  if request.url.path.endswith("/sessions/1"):
-                      state = "IN_PROGRESS" if posted else "AWAITING_PLAN_APPROVAL"
+                  def handler(request: httpx.Request) -> httpx.Response:
+                      nonlocal posted
+                      if request.method == "POST":
+                          posted = True
+                          return httpx.Response(503, json={"error": {"status": "UNAVAILABLE"}})
+                      if request.url.path.endswith("/sessions/1"):
+                          state = "IN_PROGRESS" if posted else "AWAITING_PLAN_APPROVAL"
+                          return httpx.Response(
+                              200,
+                              json={"name": "sessions/1", "id": "1", "state": state},
+                          )
                       return httpx.Response(
                           200,
-                          json={"name": "sessions/1", "id": "1", "state": state},
+                          json={
+                              "activities": [
+                                  {
+                                      "name": "sessions/1/activities/plan",
+                                      "id": "plan",
+                                      "planGenerated": {},
+                                  }
+                              ]
+                          },
                       )
-                  return httpx.Response(
-                      200,
-                      json={
-                          "activities": [
-                              {
-                                  "name": "sessions/1/activities/plan",
-                                  "id": "plan",
-                                  "planGenerated": {},
-                              }
-                          ]
-                      },
-                  )
 
-              api = JulesApiClient(
-                  "k",
-                  base_url="https://test",
-                  transport=httpx.MockTransport(handler),
-              )
-              try:
-                  result = approve_once(api, "1")
-                  assert result["outcome"] == "reconciled"
-                  assert result["observed_state"] == "IN_PROGRESS"
-              finally:
-                  api.close()
-          '''
+                  api = JulesApiClient(
+                      "k",
+                      base_url="https://test",
+                      transport=httpx.MockTransport(handler),
+                  )
+                  try:
+                      result = approve_once(api, "1")
+                      assert result["outcome"] == "reconciled"
+                      assert result["observed_state"] == "IN_PROGRESS"
+                  finally:
+                      api.close()
+              '''
+          )
           if "test_approval_lost_response_reconciles_from_state_transition_only" not in text:
               text += extra
           steering.write_text(text, encoding="utf-8")
 
           Path("tests/test_review_regressions.py").write_text(
-              '''from __future__ import annotations
+              dedent(
+                  '''
+                  from __future__ import annotations
 
-          from datetime import UTC, datetime, timedelta
-          from pathlib import Path
+                  from datetime import UTC, datetime, timedelta
+                  from pathlib import Path
 
-          import pytest
+                  import pytest
 
-          from julesctl.cli.output import event
-          from julesctl.config import state_root
-          from julesctl.domain.errors import AdmissionError
-          from julesctl.store import StateStore
-
-
-          def _attempt() -> dict[str, object]:
-              return {
-                  "title": "x",
-                  "prompt_sha256": "sha256:x",
-                  "automation_mode": "AUTO_CREATE_PR",
-                  "require_plan_approval": False,
-                  "environment_variables_enabled": None,
-              }
+                  from julesctl.cli.output import event
+                  from julesctl.config import state_root
+                  from julesctl.domain.errors import AdmissionError
+                  from julesctl.store import StateStore
 
 
-          def _reserve(
-              store: StateStore,
-              *,
-              key: str,
-              attempt_id: str,
-              max_starts_24h: int | None = None,
-          ) -> None:
-              store.reserve_work(
-                  dispatch_key=key,
-                  fingerprint=f"fingerprint:{key}",
-                  attempt_id=attempt_id,
-                  request_fingerprint=f"request:{key}",
-                  attempt=_attempt(),
-                  baseline_session_ids=[],
-                  max_starts_24h=max_starts_24h,
-              )
+                  def _attempt() -> dict[str, object]:
+                      return {
+                          "title": "x",
+                          "prompt_sha256": "sha256:x",
+                          "automation_mode": "AUTO_CREATE_PR",
+                          "require_plan_approval": False,
+                          "environment_variables_enabled": None,
+                      }
 
 
-          def _timestamp(hours_ago: int) -> str:
-              value = datetime.now(UTC) - timedelta(hours=hours_ago)
-              return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-          def test_event_schema_cannot_be_overridden() -> None:
-              value = event(
-                  {
-                      "schema": "attacker-controlled",
-                      "type": "completed",
-                      "session_id": "123",
-                  }
-              )
-              assert value["schema"] == "julesctl.event.v1"
-
-
-          def test_empty_xdg_state_home_uses_home_default(
-              monkeypatch: pytest.MonkeyPatch,
-              tmp_path: Path,
-          ) -> None:
-              monkeypatch.delenv("JULESCTL_HOME", raising=False)
-              monkeypatch.setenv("XDG_STATE_HOME", "")
-              monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-              assert state_root() == tmp_path / ".local" / "state" / "julesctl"
-
-
-          def test_rolling_start_window_uses_rfc3339_cutoff(tmp_path: Path) -> None:
-              store = StateStore(tmp_path / "state.db")
-              try:
-                  _reserve(store, key="old", attempt_id="old")
-                  store.begin_send("old", send_started_at=_timestamp(25))
-                  assert store.starts_last_24h() == 0
-
-                  _reserve(store, key="recent", attempt_id="recent", max_starts_24h=1)
-                  store.begin_send("recent", send_started_at=_timestamp(23))
-                  assert store.starts_last_24h() == 1
-
-                  with pytest.raises(AdmissionError, match="rolling start budget"):
-                      _reserve(
-                          store,
-                          key="blocked",
-                          attempt_id="blocked",
-                          max_starts_24h=1,
+                  def _reserve(
+                      store: StateStore,
+                      *,
+                      key: str,
+                      attempt_id: str,
+                      max_starts_24h: int | None = None,
+                  ) -> None:
+                      store.reserve_work(
+                          dispatch_key=key,
+                          fingerprint=f"fingerprint:{key}",
+                          attempt_id=attempt_id,
+                          request_fingerprint=f"request:{key}",
+                          attempt=_attempt(),
+                          baseline_session_ids=[],
+                          max_starts_24h=max_starts_24h,
                       )
-              finally:
-                  store.close()
-          ''',
+
+
+                  def _timestamp(hours_ago: int) -> str:
+                      value = datetime.now(UTC) - timedelta(hours=hours_ago)
+                      return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+                  def test_event_schema_cannot_be_overridden() -> None:
+                      value = event(
+                          {
+                              "schema": "attacker-controlled",
+                              "type": "completed",
+                              "session_id": "123",
+                          }
+                      )
+                      assert value["schema"] == "julesctl.event.v1"
+
+
+                  def test_empty_xdg_state_home_uses_home_default(
+                      monkeypatch: pytest.MonkeyPatch,
+                      tmp_path: Path,
+                  ) -> None:
+                      monkeypatch.delenv("JULESCTL_HOME", raising=False)
+                      monkeypatch.setenv("XDG_STATE_HOME", "")
+                      monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+                      assert state_root() == tmp_path / ".local" / "state" / "julesctl"
+
+
+                  def test_rolling_start_window_uses_rfc3339_cutoff(tmp_path: Path) -> None:
+                      store = StateStore(tmp_path / "state.db")
+                      try:
+                          _reserve(store, key="old", attempt_id="old")
+                          store.begin_send("old", send_started_at=_timestamp(25))
+                          assert store.starts_last_24h() == 0
+
+                          _reserve(store, key="recent", attempt_id="recent", max_starts_24h=1)
+                          store.begin_send("recent", send_started_at=_timestamp(23))
+                          assert store.starts_last_24h() == 1
+
+                          with pytest.raises(AdmissionError, match="rolling start budget"):
+                              _reserve(
+                                  store,
+                                  key="blocked",
+                                  attempt_id="blocked",
+                                  max_starts_24h=1,
+                              )
+                      finally:
+                          store.close()
+                  '''
+              ).lstrip("\n"),
               encoding="utf-8",
           )
           PY
