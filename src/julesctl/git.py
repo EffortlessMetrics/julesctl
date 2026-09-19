@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess  # nosec B404 - fixed executable and argv-only invocation below
+import subprocess  # nosec B404
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -34,7 +34,7 @@ def parse_github_remote(remote: str) -> str:
     parsed = urlsplit(value)
     if parsed.hostname and parsed.hostname.casefold() == "github.com":
         return _normalize_repo_path(parsed.path)
-    raise InputError(f"origin is not a GitHub repository: {remote!r}")
+    raise InputError("origin is not a GitHub repository")
 
 
 def _run_git(args: list[str], *, cwd: Path) -> str:
@@ -42,7 +42,7 @@ def _run_git(args: list[str], *, cwd: Path) -> str:
     if git_executable is None:
         raise InputError("git executable was not found on PATH")
     try:
-        completed = subprocess.run(  # nosec B603 - no shell; fixed executable; bounded internal argv
+        completed = subprocess.run(  # nosec B603
             [git_executable, *args],
             cwd=cwd,
             check=False,

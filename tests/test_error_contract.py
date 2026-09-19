@@ -21,6 +21,14 @@ def test_redaction_removes_environment_and_header_forms(monkeypatch) -> None:
     assert value.count("[REDACTED]") == 3
 
 
+def test_redaction_removes_url_userinfo_from_error_contract() -> None:
+    remote = "https://git-user:remote-token@example.invalid/owner/repo.git"
+    value = error_details(InputError(f"invalid origin: {remote}"))
+    assert "git-user" not in value["message"]
+    assert "remote-token" not in value["message"]
+    assert "https://[REDACTED]@example.invalid/owner/repo.git" in value["message"]
+
+
 def test_error_contract_uses_stable_kinds_and_retry_evidence() -> None:
     invalid = error_details(InputError("bad input"))
     assert invalid["kind"] == "invalid_input"
