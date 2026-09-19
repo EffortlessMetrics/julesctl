@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from .domain.errors import AdmissionError, InputError
 
@@ -160,12 +160,14 @@ class StateStore:
                 )
                 if rows:
                     conn.execute(
-                        "UPDATE dispatch_attempts SET state='CANCELLED_LOCAL',resolved_at=CURRENT_TIMESTAMP "
+                        "UPDATE dispatch_attempts SET state='CANCELLED_LOCAL',"
+                        "resolved_at=CURRENT_TIMESTAMP "
                         "WHERE state='RESERVED'"
                     )
                     for row in rows:
                         conn.execute(
-                            "UPDATE work_items SET status='CANCELLED_LOCAL',updated_at=CURRENT_TIMESTAMP "
+                            "UPDATE work_items SET status='CANCELLED_LOCAL',"
+                            "updated_at=CURRENT_TIMESTAMP "
                             "WHERE dispatch_key=?",
                             (row["dispatch_key"],),
                         )
@@ -242,7 +244,8 @@ class StateStore:
                     )
             generation = int(self._meta_value(conn, "fleet_generation", "0"))
             conn.execute(
-                "INSERT INTO work_items(dispatch_key,fingerprint,attempt_id,status) VALUES(?,?,?,?)",
+                "INSERT INTO work_items(dispatch_key,fingerprint,"
+                "attempt_id,status) VALUES(?,?,?,?)",
                 (dispatch_key, fingerprint, attempt_id, "RESERVED"),
             )
             conn.execute(
