@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-import subprocess
+import shutil
+import subprocess  # nosec B404 - fixed executable and argv-only invocation below
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -37,14 +38,18 @@ def parse_github_remote(remote: str) -> str:
 
 
 def _run_git(args: list[str], *, cwd: Path) -> str:
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        raise InputError("git executable was not found on PATH")
     try:
-        completed = subprocess.run(
-            ["git", *args],
+        completed = subprocess.run(  # nosec B603 - no shell; fixed executable; bounded internal argv
+            [git_executable, *args],
             cwd=cwd,
             check=False,
             capture_output=True,
             text=True,
             timeout=10,
+            shell=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise InputError(f"unable to run git: {exc}") from exc
