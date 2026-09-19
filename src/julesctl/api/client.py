@@ -3,14 +3,19 @@ from __future__ import annotations
 import time
 from collections.abc import Iterable, Iterator
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from ..domain.errors import ApiError
 from ..domain.models import ActivityWire, SessionWire, SourceWire
 
+QueryValue = str | int | float | bool | None
+
 
 class JulesApiClient:
+    """Small, security-conscious adapter for the Jules v1alpha REST API."""
+
     def __init__(
         self,
         api_key: str,
@@ -19,8 +24,14 @@ class JulesApiClient:
         transport: httpx.BaseTransport | None = None,
         timeout_seconds: float = 30.0,
     ) -> None:
+        normalized_base_url = base_url.rstrip("/")
+        parsed = urlsplit(normalized_base_url)
+        if parsed.scheme.casefold() != "https":
+            raise ValueError("Jules API base_url must use HTTPS")
+        if not parsed.hostname:
+            raise ValueError("Jules API base_url must include a hostname")
         self._client = httpx.Client(
-            base_url=base_url.rstrip("/"),
+            base_url=normalized_base_url,
             headers={"X-Goog-Api-Key": api_key, "Accept": "application/json"},
             timeout=httpx.Timeout(timeout_seconds),
             follow_redirects=False,
@@ -31,7 +42,7 @@ class JulesApiClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "JulesApiClient":
+    def __enter__(self) -> JulesApiClient:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -57,19 +68,35 @@ class JulesApiClient:
             body=payload,
         )
 
+    @staticmethod
+    def _json_object(response: httpx.Response, *, context: str) -> dict[str, Any]:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ApiError(f"{context} response was not valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ApiError(f"{context} response was not an object")
+        return payload
+
     def _request_once(
         self,
         method: str,
         path: str,
         *,
-        params: dict[str, object] | None = None,
+        params: dict[str, QueryValue] | None = None,
         json_body: dict[str, object] | None = None,
     ) -> httpx.Response:
         try:
-            response = self._client.request(method, path, params=params, json=json_body)
+            request_params = httpx.QueryParams(params) if params else None
+            response = self._client.request(
+                method,
+                path,
+                params=request_params,
+                json=json_body,
+            )
         except httpx.HTTPError as exc:
             raise ApiError(str(exc)) from exc
-        if response.is_error:
+        if not response.is_success:
             raise self._error(response)
         return response
 
@@ -77,7 +104,7 @@ class JulesApiClient:
         self,
         path: str,
         *,
-        params: dict[str, object] | None = None,
+        params: dict[str, QueryValue] | None = None,
         attempts: int = 4,
     ) -> httpx.Response:
         delay = 0.25
@@ -87,7 +114,13 @@ class JulesApiClient:
                 return self._request_once("GET", path, params=params)
             except ApiError as exc:
                 last = exc
-                if exc.http_status is not None and exc.http_status not in {429, 500, 502, 503, 504}:
+                if exc.http_status is not None and exc.http_status not in {
+                    429,
+                    500,
+                    502,
+                    503,
+                    504,
+                }:
                     raise
                 if index + 1 == attempts:
                     raise
@@ -102,7 +135,7 @@ class JulesApiClient:
         *,
         item_key: str,
         page_size: int,
-        params: dict[str, object] | None = None,
+        params: dict[str, QueryValue] | None = None,
         max_pages: int = 10_000,
     ) -> Iterator[dict[str, Any]]:
         if not 1 <= page_size <= 100:
@@ -110,16 +143,14 @@ class JulesApiClient:
         token: str | None = None
         seen_tokens: set[str] = set()
         seen_names: set[str] = set()
-        base = dict(params or {})
+        base: dict[str, QueryValue] = dict(params or {})
         for _ in range(max_pages):
             query = dict(base)
             query["pageSize"] = page_size
             if token:
                 query["pageToken"] = token
             response = self._safe_read(path, params=query)
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise ApiError("list response was not an object")
+            payload = self._json_object(response, context=f"list {item_key}")
             items = payload.get(item_key, [])
             if not isinstance(items, list):
                 raise ApiError(f"{item_key} was not a list")
@@ -147,7 +178,8 @@ class JulesApiClient:
             yield SourceWire.model_validate(item)
 
     def get_source(self, name: str) -> SourceWire:
-        payload = self._safe_read("/" + name.lstrip("/")).json()
+        response = self._safe_read("/" + name.lstrip("/"))
+        payload = self._json_object(response, context="get source")
         return SourceWire.model_validate(payload)
 
     def resolve_source(self, repo: str) -> SourceWire:
@@ -172,7 +204,7 @@ class JulesApiClient:
         page_size: int = 100,
         filter_value: str | None = None,
     ) -> Iterable[SessionWire]:
-        params: dict[str, object] = {}
+        params: dict[str, QueryValue] = {}
         if filter_value:
             params["filter"] = filter_value
         for item in self._iter_pages(
@@ -182,11 +214,14 @@ class JulesApiClient:
 
     def get_session(self, session_id: str) -> SessionWire:
         sid = session_id.removeprefix("sessions/")
-        return SessionWire.model_validate(self._safe_read(f"/sessions/{sid}").json())
+        response = self._safe_read(f"/sessions/{sid}")
+        payload = self._json_object(response, context="get session")
+        return SessionWire.model_validate(payload)
 
     def create_session(self, body: dict[str, object]) -> SessionWire:
         response = self._request_once("POST", "/sessions", json_body=body)
-        return SessionWire.model_validate(response.json())
+        payload = self._json_object(response, context="create session")
+        return SessionWire.model_validate(payload)
 
     def send_message(self, session_id: str, prompt: str) -> None:
         sid = session_id.removeprefix("sessions/")
@@ -199,12 +234,14 @@ class JulesApiClient:
     def archive_session(self, session_id: str) -> SessionWire:
         sid = session_id.removeprefix("sessions/")
         response = self._request_once("POST", f"/sessions/{sid}:archive", json_body={})
-        return SessionWire.model_validate(response.json())
+        payload = self._json_object(response, context="archive session")
+        return SessionWire.model_validate(payload)
 
     def unarchive_session(self, session_id: str) -> SessionWire:
         sid = session_id.removeprefix("sessions/")
         response = self._request_once("POST", f"/sessions/{sid}:unarchive", json_body={})
-        return SessionWire.model_validate(response.json())
+        payload = self._json_object(response, context="unarchive session")
+        return SessionWire.model_validate(payload)
 
     def delete_session(self, session_id: str) -> bool:
         sid = session_id.removeprefix("sessions/")
@@ -216,7 +253,15 @@ class JulesApiClient:
             except ApiError as exc:
                 if exc.http_status == 404:
                     return False
-                if exc.http_status not in {429, 500, 502, 503, 504} or index == 3:
+                if exc.http_status is not None and exc.http_status not in {
+                    429,
+                    500,
+                    502,
+                    503,
+                    504,
+                }:
+                    raise
+                if index == 3:
                     raise
                 time.sleep(delay)
                 delay = min(delay * 2, 2.0)
@@ -230,7 +275,7 @@ class JulesApiClient:
         filter_value: str | None = None,
     ) -> Iterable[ActivityWire]:
         sid = session_id.removeprefix("sessions/")
-        params: dict[str, object] = {}
+        params: dict[str, QueryValue] = {}
         if filter_value:
             params["filter"] = filter_value
         for item in self._iter_pages(

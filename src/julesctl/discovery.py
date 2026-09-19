@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from .domain.errors import ApiError
+
 DISCOVERY_URL = "https://jules.googleapis.com/$discovery/rest?version=v1alpha"
 EXPECTED_OPERATIONS = {
     "sources.list",
@@ -71,11 +73,30 @@ def summarize_discovery(payload: dict[str, object]) -> DiscoverySummary:
     )
 
 
-def fetch_discovery() -> tuple[dict[str, object], DiscoverySummary]:
-    with httpx.Client(timeout=30.0, follow_redirects=False, trust_env=False) as client:
-        response = client.get(DISCOVERY_URL, headers={"Accept": "application/json"})
-        response.raise_for_status()
-        payload = response.json()
+def fetch_discovery(
+    *,
+    transport: httpx.BaseTransport | None = None,
+) -> tuple[dict[str, object], DiscoverySummary]:
+    try:
+        with httpx.Client(
+            timeout=30.0,
+            follow_redirects=False,
+            trust_env=False,
+            transport=transport,
+        ) as client:
+            response = client.get(DISCOVERY_URL, headers={"Accept": "application/json"})
+            if not response.is_success:
+                raise ApiError(
+                    f"Jules Discovery returned HTTP {response.status_code}",
+                    http_status=response.status_code,
+                )
+            payload = response.json()
+    except ApiError:
+        raise
+    except httpx.HTTPError as exc:
+        raise ApiError(f"Jules Discovery request failed: {exc}") from exc
+    except ValueError as exc:
+        raise ApiError("Jules Discovery response was not valid JSON") from exc
     if not isinstance(payload, dict):
-        raise ValueError("Jules Discovery response was not an object")
+        raise ApiError("Jules Discovery response was not an object")
     return payload, summarize_discovery(payload)
