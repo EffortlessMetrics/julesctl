@@ -87,6 +87,11 @@ CREATE TABLE IF NOT EXISTS activity_receipts (
     first_emitted_at TEXT,
     PRIMARY KEY(session_id, activity_name)
 );
+CREATE TABLE IF NOT EXISTS activity_cursors (
+    session_id TEXT PRIMARY KEY,
+    highest_create_time TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS deletion_plans (
     plan_id TEXT PRIMARY KEY,
     selector_json TEXT NOT NULL,
@@ -462,6 +467,55 @@ class StateStore:
             (session_id, activity_name, activity_id, create_time, event_type, payload_sha256),
         )
         return cur.rowcount == 1
+
+    def activity_cursor(self, session_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT highest_create_time FROM activity_cursors WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        if row is None or row["highest_create_time"] is None:
+            return None
+        return str(row["highest_create_time"])
+
+    def commit_activity_batch(
+        self,
+        *,
+        session_id: str,
+        receipts: list[dict[str, str | None]],
+        highest_create_time: str | None,
+    ) -> set[str]:
+        new_names: set[str] = set()
+        with self.immediate() as conn:
+            for receipt in receipts:
+                activity_name = str(receipt["activity_name"])
+                cur = conn.execute(
+                    """INSERT OR IGNORE INTO activity_receipts(
+                        session_id,activity_name,activity_id,create_time,event_type,
+                        payload_sha256
+                    ) VALUES(?,?,?,?,?,?)""",
+                    (
+                        session_id,
+                        activity_name,
+                        receipt.get("activity_id"),
+                        receipt.get("create_time"),
+                        receipt["event_type"],
+                        receipt["payload_sha256"],
+                    ),
+                )
+                if cur.rowcount == 1:
+                    new_names.add(activity_name)
+            if highest_create_time is not None:
+                conn.execute(
+                    """INSERT INTO activity_cursors(
+                        session_id,highest_create_time
+                    ) VALUES(?,?)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        highest_create_time=excluded.highest_create_time,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (session_id, highest_create_time),
+                )
+        return new_names
 
     def active_rows(self) -> list[sqlite3.Row]:
         return list(
