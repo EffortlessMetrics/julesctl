@@ -159,12 +159,15 @@ def test_activity_cursor_uses_documented_create_time_parameter() -> None:
 
     api = _client(httpx.MockTransport(handler))
     try:
-        assert list(
-            api.iter_activities(
-                "sessions/123",
-                create_time="2026-09-19T03:00:00Z",
+        assert (
+            list(
+                api.iter_activities(
+                    "sessions/123",
+                    create_time="2026-09-19T03:00:00Z",
+                )
             )
-        ) == []
+            == []
+        )
         assert observed[0].url.params["createTime"] == "2026-09-19T03:00:00Z"
         assert "filter" not in observed[0].url.params
     finally:
