@@ -29,68 +29,76 @@ jobs:
           store_path = Path("src/julesctl/store.py")
           store = store_path.read_text(encoding="utf-8")
           schema_marker = "CREATE TABLE IF NOT EXISTS deletion_plans ("
-          cursor_schema = """CREATE TABLE IF NOT EXISTS activity_cursors (
-              session_id TEXT PRIMARY KEY,
-              highest_create_time TEXT,
-              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-          );
-          """
+          cursor_schema = "\n".join(
+              [
+                  "CREATE TABLE IF NOT EXISTS activity_cursors (",
+                  "    session_id TEXT PRIMARY KEY,",
+                  "    highest_create_time TEXT,",
+                  "    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                  ");",
+                  "",
+              ]
+          )
           if "CREATE TABLE IF NOT EXISTS activity_cursors" not in store:
               if schema_marker not in store:
                   raise SystemExit("deletion plan schema marker not found")
               store = store.replace(schema_marker, cursor_schema + schema_marker, 1)
 
           method_marker = "    def active_rows(self) -> list[sqlite3.Row]:\n"
-          cursor_methods = '''    def activity_cursor(self, session_id: str) -> str | None:
-              row = self._conn.execute(
-                  "SELECT highest_create_time FROM activity_cursors WHERE session_id=?",
-                  (session_id,),
-              ).fetchone()
-              if row is None or row["highest_create_time"] is None:
-                  return None
-              return str(row["highest_create_time"])
-
-          def commit_activity_batch(
-              self,
-              *,
-              session_id: str,
-              receipts: list[dict[str, str | None]],
-              highest_create_time: str | None,
-          ) -> set[str]:
-              new_names: set[str] = set()
-              with self.immediate() as conn:
-                  for receipt in receipts:
-                      activity_name = str(receipt["activity_name"])
-                      cur = conn.execute(
-                          """INSERT OR IGNORE INTO activity_receipts(
-                              session_id,activity_name,activity_id,create_time,event_type,
-                              payload_sha256
-                          ) VALUES(?,?,?,?,?,?)""",
-                          (
-                              session_id,
-                              activity_name,
-                              receipt.get("activity_id"),
-                              receipt.get("create_time"),
-                              receipt["event_type"],
-                              receipt["payload_sha256"],
-                          ),
-                      )
-                      if cur.rowcount == 1:
-                          new_names.add(activity_name)
-                  if highest_create_time is not None:
-                      conn.execute(
-                          """INSERT INTO activity_cursors(
-                              session_id,highest_create_time
-                          ) VALUES(?,?)
-                          ON CONFLICT(session_id) DO UPDATE SET
-                              highest_create_time=excluded.highest_create_time,
-                              updated_at=CURRENT_TIMESTAMP
-                          """,
-                          (session_id, highest_create_time),
-                      )
-              return new_names
-
-          '''
+          cursor_methods = "\n".join(
+              [
+                  "    def activity_cursor(self, session_id: str) -> str | None:",
+                  "        row = self._conn.execute(",
+                  "            \"SELECT highest_create_time FROM activity_cursors WHERE session_id=?\",",
+                  "            (session_id,),",
+                  "        ).fetchone()",
+                  "        if row is None or row[\"highest_create_time\"] is None:",
+                  "            return None",
+                  "        return str(row[\"highest_create_time\"])",
+                  "",
+                  "    def commit_activity_batch(",
+                  "        self,",
+                  "        *,",
+                  "        session_id: str,",
+                  "        receipts: list[dict[str, str | None]],",
+                  "        highest_create_time: str | None,",
+                  "    ) -> set[str]:",
+                  "        new_names: set[str] = set()",
+                  "        with self.immediate() as conn:",
+                  "            for receipt in receipts:",
+                  "                activity_name = str(receipt[\"activity_name\"])",
+                  "                cur = conn.execute(",
+                  "                    \"\"\"INSERT OR IGNORE INTO activity_receipts(",
+                  "                        session_id,activity_name,activity_id,create_time,event_type,",
+                  "                        payload_sha256",
+                  "                    ) VALUES(?,?,?,?,?,?)\"\"\",",
+                  "                    (",
+                  "                        session_id,",
+                  "                        activity_name,",
+                  "                        receipt.get(\"activity_id\"),",
+                  "                        receipt.get(\"create_time\"),",
+                  "                        receipt[\"event_type\"],",
+                  "                        receipt[\"payload_sha256\"],",
+                  "                    ),",
+                  "                )",
+                  "                if cur.rowcount == 1:",
+                  "                    new_names.add(activity_name)",
+                  "            if highest_create_time is not None:",
+                  "                conn.execute(",
+                  "                    \"\"\"INSERT INTO activity_cursors(",
+                  "                        session_id,highest_create_time",
+                  "                    ) VALUES(?,?)",
+                  "                    ON CONFLICT(session_id) DO UPDATE SET",
+                  "                        highest_create_time=excluded.highest_create_time,",
+                  "                        updated_at=CURRENT_TIMESTAMP",
+                  "                    \"\"\",",
+                  "                    (session_id, highest_create_time),",
+                  "                )",
+                  "        return new_names",
+                  "",
+                  "",
+              ]
+          )
           if "def activity_cursor" not in store:
               if method_marker not in store:
                   raise SystemExit("active_rows method marker not found")
@@ -118,25 +126,26 @@ jobs:
           except StopIteration as exc:
               raise SystemExit("controller reconcile/session_result markers not found") from exc
 
-          replacement = '''    def reconcile(self) -> list[dict[str, object]]:
-              events: list[dict[str, object]] = []
-              managed = self.ctx.store.managed_session_ids()
-              sessions = list(self.ctx.api.iter_sessions())
-              self.ctx.store.reconcile_active_snapshot({session.id for session in sessions})
-              for session in sessions:
-                  origin = "managed" if session.id in managed else "external"
-                  self._remember_session(session, origin=origin)
-                  events.extend(
-                      reconcile_session_activities(
-                          self.ctx.api,
-                          self.ctx.store,
-                          session.id,
-                          origin=origin,
-                      )
-                  )
-              return events
-
-          '''.splitlines(keepends=True)
+          replacement = [
+              "    def reconcile(self) -> list[dict[str, object]]:\n",
+              "        events: list[dict[str, object]] = []\n",
+              "        managed = self.ctx.store.managed_session_ids()\n",
+              "        sessions = list(self.ctx.api.iter_sessions())\n",
+              "        self.ctx.store.reconcile_active_snapshot({session.id for session in sessions})\n",
+              "        for session in sessions:\n",
+              "            origin = \"managed\" if session.id in managed else \"external\"\n",
+              "            self._remember_session(session, origin=origin)\n",
+              "            events.extend(\n",
+              "                reconcile_session_activities(\n",
+              "                    self.ctx.api,\n",
+              "                    self.ctx.store,\n",
+              "                    session.id,\n",
+              "                    origin=origin,\n",
+              "                )\n",
+              "            )\n",
+              "        return events\n",
+              "\n",
+          ]
           lines[start:end] = replacement
           controller_path.write_text("".join(lines), encoding="utf-8")
           PY
