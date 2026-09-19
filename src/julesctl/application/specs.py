@@ -12,9 +12,7 @@ MAX_PROMPT_BYTES = 1024 * 1024
 def _validate_prompt(prompt: str) -> str:
     encoded = prompt.encode("utf-8")
     if len(encoded) > MAX_PROMPT_BYTES:
-        raise InputError(
-            f"prompt is {len(encoded)} bytes; maximum is {MAX_PROMPT_BYTES} bytes"
-        )
+        raise InputError(f"prompt is {len(encoded)} bytes; maximum is {MAX_PROMPT_BYTES} bytes")
     if not prompt.strip():
         raise InputError("prompt must not be empty")
     return prompt

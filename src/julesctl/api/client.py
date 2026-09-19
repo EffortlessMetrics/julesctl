@@ -84,9 +84,7 @@ class JulesApiClient:
                 return None
             if retry_at.tzinfo is None:
                 retry_at = retry_at.replace(tzinfo=UTC)
-            seconds_value = (
-                retry_at.astimezone(UTC) - self._now().astimezone(UTC)
-            ).total_seconds()
+            seconds_value = (retry_at.astimezone(UTC) - self._now().astimezone(UTC)).total_seconds()
             return max(seconds_value, 0.0)
         return float(max(seconds, 0))
 

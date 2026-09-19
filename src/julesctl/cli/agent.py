@@ -138,10 +138,7 @@ def new_session(
         }
         if jsonl:
             emit_jsonl(
-                [
-                    {**item, "schema": "julesctl.dispatch-result.v1"}
-                    for item in resolved_items
-                ]
+                [{**item, "schema": "julesctl.dispatch-result.v1"} for item in resolved_items]
             )
         elif json_output:
             emit_json(operation("new", "partial" if partial else "completed", data))
