@@ -10,38 +10,12 @@ import typer
 
 from ..application.specs import derive_title, read_prompt
 from ..client import JulesClient
-from ..domain.errors import ApiError, JulesCtlError
+from ..domain.errors import JulesCtlError
 from ..domain.models import DispatchSpec
 from ..git import infer_branch, infer_github_repo
-from .output import console, emit_json, emit_jsonl, err_console, operation
-
-
-def _error_details(exc: Exception) -> dict[str, object]:
-    value: dict[str, object] = {
-        "kind": exc.__class__.__name__,
-        "message": str(exc),
-    }
-    if isinstance(exc, ApiError):
-        value["http_status"] = exc.http_status
-        value["api_status"] = exc.api_status
-        value["reconcile_required"] = exc.create_outcome_uncertain
-    return value
-
-
-def _fail(command: str, exc: Exception, *, machine: bool) -> None:
-    if machine:
-        emit_json(
-            {
-                "schema": "julesctl.operation.v1",
-                "operation_id": str(uuid.uuid4()),
-                "command": command,
-                "outcome": "error",
-                "error": _error_details(exc),
-            }
-        )
-    else:
-        err_console.print(f"[red]{exc}[/red]")
-    raise typer.Exit(getattr(exc, "exit_code", 2)) from exc
+from .common import error_details as _error_details
+from .common import fail as _fail
+from .output import console, emit_json, emit_jsonl, operation
 
 
 def _dispatch_one(spec: DispatchSpec) -> dict[str, object]:

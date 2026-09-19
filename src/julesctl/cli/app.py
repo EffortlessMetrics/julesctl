@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from typing import Annotated
 
@@ -10,14 +9,7 @@ from ..application.steering import approve_once, archive_once, message_once, una
 from ..config import Settings, default_database_path, profile_name
 from ..controller import JulesController
 from ..discovery import fetch_discovery
-from ..domain.errors import (
-    AdmissionError,
-    ApiError,
-    AuthError,
-    IndeterminateError,
-    InputError,
-    JulesCtlError,
-)
+from ..domain.errors import InputError, JulesCtlError
 from ..domain.models import DispatchSpec
 from ..store import StateStore
 from .agent import (
@@ -35,7 +27,9 @@ from .agent import (
     show_session_command,
     watch_command,
 )
-from .output import console, emit_json, emit_jsonl, err_console, event, operation
+from .common import error_details as _error_details
+from .common import fail as _error
+from .output import console, emit_json, emit_jsonl, event, operation
 from .queue import queue_app, worker_app
 
 app = typer.Typer(help="Safe control of Google Jules cloud coding sessions.", no_args_is_help=True)
@@ -70,61 +64,6 @@ app.command("retry")(retry_command)
 
 def _controller() -> JulesController:
     return JulesController.from_settings(Settings.from_env())
-
-
-def _error_kind(exc: Exception) -> str:
-    if isinstance(exc, AuthError):
-        return "authentication_failed"
-    if isinstance(exc, AdmissionError):
-        return "admission_denied"
-    if isinstance(exc, IndeterminateError):
-        return "indeterminate"
-    if isinstance(exc, InputError | ValueError):
-        return "invalid_input"
-    if isinstance(exc, ApiError):
-        return "create_outcome_unknown" if exc.create_outcome_uncertain else "api_rejected"
-    return "internal_error"
-
-
-def _error_details(exc: Exception) -> dict[str, object]:
-    value: dict[str, object] = {
-        "kind": _error_kind(exc),
-        "message": str(exc),
-    }
-    if isinstance(exc, ApiError):
-        value.update(
-            {
-                "http_status": exc.http_status,
-                "api_status": exc.api_status,
-                "transient": exc.create_outcome_uncertain,
-                "safe_to_retry": False,
-                "reconcile_required": exc.create_outcome_uncertain,
-            }
-        )
-    elif isinstance(exc, IndeterminateError):
-        value.update(
-            {
-                "transient": True,
-                "safe_to_retry": False,
-                "reconcile_required": True,
-            }
-        )
-    return value
-
-
-def _error(command: str, exc: Exception, *, machine: bool) -> None:
-    if machine:
-        value = {
-            "schema": "julesctl.operation.v1",
-            "operation_id": str(uuid.uuid4()),
-            "command": command,
-            "outcome": "error",
-            "error": _error_details(exc),
-        }
-        emit_json(value)
-    else:
-        err_console.print(f"[red]{exc}[/red]")
-    raise typer.Exit(getattr(exc, "exit_code", 2)) from exc
 
 
 @auth_app.command("check")

@@ -17,7 +17,13 @@ _UNRESOLVED_ATTEMPT_STATES = (
     "INDETERMINATE_MULTIPLE",
 )
 
-_ROLLING_24H_CUTOFF_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now','-24 hours')"
+_UNRESOLVED_ATTEMPT_COUNT_SQL = (
+    "SELECT COUNT(*) AS n FROM dispatch_attempts WHERE state IN (?,?,?,?,?)"
+)
+_ROLLING_24H_COUNT_SQL = (
+    "SELECT COUNT(*) AS n FROM dispatch_attempts "
+    "WHERE send_started_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-24 hours')"
+)
 
 _SCHEMA_VERSION = 1
 
@@ -227,16 +233,12 @@ class StateStore:
         ).fetchone()
 
     def starts_last_24h(self) -> int:
-        row = self._conn.execute(
-            "SELECT COUNT(*) AS n FROM dispatch_attempts "
-            f"WHERE send_started_at >= {_ROLLING_24H_CUTOFF_SQL}"
-        ).fetchone()
+        row = self._conn.execute(_ROLLING_24H_COUNT_SQL).fetchone()
         return int(row["n"] if row else 0)
 
     def unresolved_attempt_count(self) -> int:
-        marks = ",".join("?" for _ in _UNRESOLVED_ATTEMPT_STATES)
         row = self._conn.execute(
-            f"SELECT COUNT(*) AS n FROM dispatch_attempts WHERE state IN ({marks})",
+            _UNRESOLVED_ATTEMPT_COUNT_SQL,
             _UNRESOLVED_ATTEMPT_STATES,
         ).fetchone()
         return int(row["n"] if row else 0)
@@ -268,9 +270,8 @@ class StateStore:
                     "SELECT COUNT(*) AS n FROM sessions WHERE deleted_at IS NULL "
                     "AND lifecycle IN ('executing','actionable','paused','unknown')"
                 ).fetchone()
-                marks = ",".join("?" for _ in _UNRESOLVED_ATTEMPT_STATES)
                 unresolved = conn.execute(
-                    f"SELECT COUNT(*) AS n FROM dispatch_attempts WHERE state IN ({marks})",
+                    _UNRESOLVED_ATTEMPT_COUNT_SQL,
                     _UNRESOLVED_ATTEMPT_STATES,
                 ).fetchone()
                 occupancy = int(active["n"] if active else 0) + int(
@@ -281,10 +282,7 @@ class StateStore:
                         f"new-work admission is full ({occupancy}/{max_occupancy})"
                     )
             if max_starts_24h is not None:
-                recent = conn.execute(
-                    "SELECT COUNT(*) AS n FROM dispatch_attempts "
-                    f"WHERE send_started_at >= {_ROLLING_24H_CUTOFF_SQL}"
-                ).fetchone()
+                recent = conn.execute(_ROLLING_24H_COUNT_SQL).fetchone()
                 starts = int(recent["n"] if recent else 0)
                 if starts >= max_starts_24h:
                     raise AdmissionError(
@@ -486,12 +484,12 @@ class StateStore:
         missing = [row[0] for row in rows if row[0] not in seen_ids]
         if not missing:
             return
-        placeholders = ",".join("?" for _ in missing)
-        self._conn.execute(
-            f"UPDATE sessions SET lifecycle='not_visible',last_observed_at=CURRENT_TIMESTAMP "
-            f"WHERE session_id IN ({placeholders})",
-            missing,
-        )
+        with self.immediate() as conn:
+            conn.executemany(
+                "UPDATE sessions SET lifecycle='not_visible',"
+                "last_observed_at=CURRENT_TIMESTAMP WHERE session_id=?",
+                ((session_id,) for session_id in missing),
+            )
 
     def record_activity(
         self,

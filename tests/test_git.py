@@ -42,15 +42,17 @@ def test_infer_repo_uses_origin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         observed.append(command)
         return SimpleNamespace(returncode=0, stdout="git@github.com:acme/repo.git\n", stderr="")
 
+    monkeypatch.setattr(git_module.shutil, "which", lambda command: "/tools/git")
     monkeypatch.setattr(git_module.subprocess, "run", run)
     assert infer_github_repo(cwd=tmp_path) == "acme/repo"
-    assert observed == [["git", "remote", "get-url", "origin"]]
+    assert observed == [["/tools/git", "remote", "get-url", "origin"]]
 
 
 def test_infer_branch_rejects_detached_head(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr(git_module.shutil, "which", lambda command: "/tools/git")
     monkeypatch.setattr(
         git_module.subprocess,
         "run",
@@ -58,3 +60,12 @@ def test_infer_branch_rejects_detached_head(
     )
     with pytest.raises(InputError, match="detached HEAD"):
         infer_branch(cwd=tmp_path)
+
+
+def test_infer_repo_rejects_missing_git(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(git_module.shutil, "which", lambda command: None)
+    with pytest.raises(InputError, match="git executable was not found"):
+        infer_github_repo(cwd=tmp_path)

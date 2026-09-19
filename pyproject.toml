@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT OR Apache-2.0"}
 authors = [{name = "EffortlessMetrics"}]
+keywords = ["jules", "agent", "automation", "cli", "control-plane"]
 dependencies = [
   "httpx>=0.28,<1",
   "pydantic>=2.8,<3",
@@ -17,25 +18,45 @@ dependencies = [
   "rich>=13.7,<15",
 ]
 classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Typing :: Typed",
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
   "License :: OSI Approved :: Apache Software License",
 ]
+
+[project.urls]
+Homepage = "https://github.com/EffortlessMetrics/julesctl"
+Repository = "https://github.com/EffortlessMetrics/julesctl"
+Issues = "https://github.com/EffortlessMetrics/julesctl/issues"
+Changelog = "https://github.com/EffortlessMetrics/julesctl/blob/main/CHANGELOG.md"
 
 [project.scripts]
 julesctl = "julesctl.cli.app:app"
 
 [project.optional-dependencies]
 dev = [
+  "build>=1.2,<2",
   "jsonschema>=4.23,<5",
-  "pytest>=8.3,<9",
+  "pytest>=9.0.3,<10",
   "pytest-cov>=5,<7",
   "ruff>=0.9,<1",
   "mypy>=1.13,<2",
 ]
 
+security = [
+  "bandit[toml]>=1.8,<2",
+  "pip-audit>=2.9,<3",
+]
+release = [
+  "build>=1.2,<2",
+  "twine>=7,<8",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/julesctl"]
+include = ["src/julesctl/py.typed"]
 
 [tool.ruff]
 target-version = "py311"
@@ -49,10 +70,26 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.11"
 packages = ["julesctl"]
 mypy_path = "src"
+check_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
 
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = "-q --strict-markers"
 testpaths = ["tests"]
 markers = [
   "live: opt-in tests that access the real Jules API and consume live account state",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["julesctl"]
+
+[tool.coverage.report]
+fail_under = 65
+show_missing = true
+skip_covered = false
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101"]
