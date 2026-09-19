@@ -59,6 +59,7 @@ def test_empty_xdg_state_home_uses_home_default(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setattr("julesctl.config.platform.system", lambda: "Linux")
     monkeypatch.delenv("JULESCTL_HOME", raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", "")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
