@@ -80,6 +80,41 @@ class FakeClient:
             "url": "https://github.com/acme/repo/pull/1",
         }
 
+    def remove_sessions(self, session_ids: list[str], *, max_workers: int = 4):
+        return {
+            "outcome": "completed",
+            "deleted": len(session_ids),
+            "already_absent": 0,
+            "failed": [],
+            "max_workers": max_workers,
+        }
+
+    def plan_prune(self, **kwargs):
+        return {
+            "outcome": "planned",
+            "plan_id": "prune_1",
+            "selector": kwargs,
+            "targets": [{"session_id": "1"}],
+        }
+
+    def apply_prune(self, plan_id: str, **kwargs):
+        return {
+            "outcome": "completed",
+            "plan_id": plan_id,
+            "deleted": 1,
+            "already_absent": 0,
+            "failed": [],
+            **kwargs,
+        }
+
+    def retry_session(self, session_id: str, *, dispatch_key: str, title=None):
+        return {
+            "outcome": "created",
+            "retry_of_session_id": session_id,
+            "dispatch_key": dispatch_key,
+            "title": title,
+        }
+
 
 def _fake(monkeypatch):
     client = FakeClient()
@@ -151,3 +186,33 @@ def test_result_patch_and_pr_commands(monkeypatch, tmp_path) -> None:
     pr = runner.invoke(app, ["pr", "1", "--json"])
     assert pr.exit_code == 0, pr.output
     assert json.loads(pr.stdout)["data"]["url"].endswith("/pull/1")
+
+
+def test_rm_prune_and_retry_commands(monkeypatch) -> None:
+    _fake(monkeypatch)
+
+    denied = runner.invoke(app, ["rm", "1", "--json"])
+    assert denied.exit_code == 2
+    assert json.loads(denied.stdout)["outcome"] == "error"
+
+    removed = runner.invoke(app, ["rm", "1", "2", "--yes", "--json"])
+    assert removed.exit_code == 0, removed.output
+    assert json.loads(removed.stdout)["data"]["deleted"] == 2
+
+    planned = runner.invoke(app, ["prune", "--nonterminal", "--json"])
+    assert planned.exit_code == 0, planned.output
+    assert json.loads(planned.stdout)["data"]["plan_id"] == "prune_1"
+
+    applied = runner.invoke(
+        app,
+        ["prune", "--apply", "prune_1", "--yes", "--passes", "2", "--json"],
+    )
+    assert applied.exit_code == 0, applied.output
+    assert json.loads(applied.stdout)["data"]["passes"] == 2
+
+    retried = runner.invoke(
+        app,
+        ["retry", "old", "--dispatch-key", "retry:old:1", "--json"],
+    )
+    assert retried.exit_code == 0, retried.output
+    assert json.loads(retried.stdout)["data"]["retry_of_session_id"] == "old"

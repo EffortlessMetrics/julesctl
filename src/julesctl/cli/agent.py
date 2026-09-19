@@ -368,3 +368,103 @@ def pull_request_command(
             console.print(result)
     except (JulesCtlError, ValueError) as exc:
         _fail("pr", exc, machine=json_output)
+
+
+def remove_command(
+    session_ids: list[str],
+    yes: Annotated[bool, typer.Option("--yes")] = False,
+    concurrency: Annotated[int, typer.Option("--concurrency", min=1, max=32)] = 4,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Delete an explicit list of session IDs and preserve per-target outcomes."""
+
+    try:
+        if not yes:
+            raise ValueError("--yes is required for deletion")
+        with JulesClient.from_env() as client:
+            result = client.remove_sessions(session_ids, max_workers=concurrency)
+        if json_output:
+            emit_json(operation("rm", str(result["outcome"]), result))
+        else:
+            console.print(result)
+        if result["outcome"] == "partial":
+            raise typer.Exit(6)
+    except typer.Exit:
+        raise
+    except (JulesCtlError, ValueError) as exc:
+        _fail("rm", exc, machine=json_output)
+
+
+def prune_command(
+    state: Annotated[list[str] | None, typer.Option("--state")] = None,
+    repo: Annotated[str | None, typer.Option("--repo")] = None,
+    older_than: Annotated[str | None, typer.Option("--older-than")] = None,
+    nonterminal: Annotated[bool, typer.Option("--nonterminal")] = False,
+    all_sessions: Annotated[bool, typer.Option("--all")] = False,
+    include_unknown: Annotated[bool, typer.Option("--include-unknown")] = False,
+    apply: Annotated[str | None, typer.Option("--apply", metavar="PLAN_ID")] = None,
+    yes: Annotated[bool, typer.Option("--yes")] = False,
+    concurrency: Annotated[int, typer.Option("--concurrency", min=1, max=32)] = 4,
+    settle: Annotated[float, typer.Option("--settle", min=0)] = 0.0,
+    passes: Annotated[int, typer.Option("--passes", min=1, max=20)] = 1,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Preview an exact fleet deletion plan, or apply one reviewed plan."""
+
+    try:
+        with JulesClient.from_env() as client:
+            if apply is not None:
+                if not yes:
+                    raise ValueError("--yes is required with --apply")
+                if any([state, repo, older_than, nonterminal, all_sessions, include_unknown]):
+                    raise ValueError("selectors cannot be combined with --apply")
+                result = client.apply_prune(
+                    apply,
+                    max_workers=concurrency,
+                    settle_seconds=settle,
+                    passes=passes,
+                )
+            else:
+                if yes:
+                    raise ValueError("--yes has no effect without --apply PLAN_ID")
+                result = client.plan_prune(
+                    states=state,
+                    repo=repo,
+                    older_than=older_than,
+                    nonterminal=nonterminal,
+                    all_sessions=all_sessions,
+                    include_unknown=include_unknown,
+                )
+        if json_output:
+            emit_json(operation("prune", str(result["outcome"]), result))
+        else:
+            console.print(result)
+        if result["outcome"] == "partial":
+            raise typer.Exit(6)
+    except typer.Exit:
+        raise
+    except (JulesCtlError, ValueError) as exc:
+        _fail("prune", exc, machine=json_output)
+
+
+def retry_command(
+    session_id: str,
+    dispatch_key: Annotated[str, typer.Option("--dispatch-key")],
+    title: Annotated[str | None, typer.Option("--title")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Create one explicit replacement dispatch without mutating the original attempt."""
+
+    try:
+        with JulesClient.from_env() as client:
+            result = client.retry_session(
+                session_id,
+                dispatch_key=dispatch_key,
+                title=title,
+            )
+        if json_output:
+            emit_json(operation("retry", str(result["outcome"]), result))
+        else:
+            console.print(result)
+    except (JulesCtlError, ValueError) as exc:
+        _fail("retry", exc, machine=json_output)
