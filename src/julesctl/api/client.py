@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterable, Iterator
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -11,6 +12,8 @@ from ..domain.models import ActivityWire, SessionWire, SourceWire
 
 
 class JulesApiClient:
+    """Small, security-conscious adapter for the Jules v1alpha REST API."""
+
     def __init__(
         self,
         api_key: str,
@@ -19,8 +22,14 @@ class JulesApiClient:
         transport: httpx.BaseTransport | None = None,
         timeout_seconds: float = 30.0,
     ) -> None:
+        normalized_base_url = base_url.rstrip("/")
+        parsed = urlsplit(normalized_base_url)
+        if parsed.scheme.casefold() != "https":
+            raise ValueError("Jules API base_url must use HTTPS")
+        if not parsed.hostname:
+            raise ValueError("Jules API base_url must include a hostname")
         self._client = httpx.Client(
-            base_url=base_url.rstrip("/"),
+            base_url=normalized_base_url,
             headers={"X-Goog-Api-Key": api_key, "Accept": "application/json"},
             timeout=httpx.Timeout(timeout_seconds),
             follow_redirects=False,
@@ -31,7 +40,7 @@ class JulesApiClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "JulesApiClient":
+    def __enter__(self) -> JulesApiClient:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -57,6 +66,16 @@ class JulesApiClient:
             body=payload,
         )
 
+    @staticmethod
+    def _json_object(response: httpx.Response, *, context: str) -> dict[str, Any]:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ApiError(f"{context} response was not valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ApiError(f"{context} response was not an object")
+        return payload
+
     def _request_once(
         self,
         method: str,
@@ -69,7 +88,7 @@ class JulesApiClient:
             response = self._client.request(method, path, params=params, json=json_body)
         except httpx.HTTPError as exc:
             raise ApiError(str(exc)) from exc
-        if response.is_error:
+        if not response.is_success:
             raise self._error(response)
         return response
 
@@ -87,7 +106,13 @@ class JulesApiClient:
                 return self._request_once("GET", path, params=params)
             except ApiError as exc:
                 last = exc
-                if exc.http_status is not None and exc.http_status not in {429, 500, 502, 503, 504}:
+                if exc.http_status is not None and exc.http_status not in {
+                    429,
+                    500,
+                    502,
+                    503,
+                    504,
+                }:
                     raise
                 if index + 1 == attempts:
                     raise
@@ -117,9 +142,7 @@ class JulesApiClient:
             if token:
                 query["pageToken"] = token
             response = self._safe_read(path, params=query)
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise ApiError("list response was not an object")
+            payload = self._json_object(response, context=f"list {item_key}")
             items = payload.get(item_key, [])
             if not isinstance(items, list):
                 raise ApiError(f"{item_key} was not a list")
@@ -147,7 +170,8 @@ class JulesApiClient:
             yield SourceWire.model_validate(item)
 
     def get_source(self, name: str) -> SourceWire:
-        payload = self._safe_read("/" + name.lstrip("/")).json()
+        response = self._safe_read("/" + name.lstrip("/"))
+        payload = self._json_object(response, context="get source")
         return SourceWire.model_validate(payload)
 
     def resolve_source(self, repo: str) -> SourceWire:
@@ -182,11 +206,14 @@ class JulesApiClient:
 
     def get_session(self, session_id: str) -> SessionWire:
         sid = session_id.removeprefix("sessions/")
-        return SessionWire.model_validate(self._safe_read(f"/sessions/{sid}").json())
+        response = self._safe_read(f"/sessions/{sid}")
+        payload = self._json_object(response, context="get session")
+        return SessionWire.model_validate(payload)
 
     def create_session(self, body: dict[str, object]) -> SessionWire:
         response = self._request_once("POST", "/sessions", json_body=body)
-        return SessionWire.model_validate(response.json())
+        payload = self._json_object(response, context="create session")
+        return SessionWire.model_validate(payload)
 
     def send_message(self, session_id: str, prompt: str) -> None:
         sid = session_id.removeprefix("sessions/")
@@ -199,12 +226,14 @@ class JulesApiClient:
     def archive_session(self, session_id: str) -> SessionWire:
         sid = session_id.removeprefix("sessions/")
         response = self._request_once("POST", f"/sessions/{sid}:archive", json_body={})
-        return SessionWire.model_validate(response.json())
+        payload = self._json_object(response, context="archive session")
+        return SessionWire.model_validate(payload)
 
     def unarchive_session(self, session_id: str) -> SessionWire:
         sid = session_id.removeprefix("sessions/")
         response = self._request_once("POST", f"/sessions/{sid}:unarchive", json_body={})
-        return SessionWire.model_validate(response.json())
+        payload = self._json_object(response, context="unarchive session")
+        return SessionWire.model_validate(payload)
 
     def delete_session(self, session_id: str) -> bool:
         sid = session_id.removeprefix("sessions/")
@@ -216,7 +245,15 @@ class JulesApiClient:
             except ApiError as exc:
                 if exc.http_status == 404:
                     return False
-                if exc.http_status not in {429, 500, 502, 503, 504} or index == 3:
+                if exc.http_status is not None and exc.http_status not in {
+                    429,
+                    500,
+                    502,
+                    503,
+                    504,
+                }:
+                    raise
+                if index == 3:
                     raise
                 time.sleep(delay)
                 delay = min(delay * 2, 2.0)

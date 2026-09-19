@@ -7,6 +7,25 @@ from julesctl.api.client import JulesApiClient
 from julesctl.domain.errors import ApiError
 
 
+def test_non_https_base_url_is_rejected_before_client_creation() -> None:
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        JulesApiClient("secret", base_url="http://example.test")
+
+
+def test_redirect_is_treated_as_failed_api_response() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"Location": "https://other.test/sessions"})
+
+    client = JulesApiClient(
+        "k", base_url="https://test", transport=httpx.MockTransport(handler)
+    )
+    try:
+        with pytest.raises(ApiError, match="HTTP 302"):
+            list(client.iter_sessions())
+    finally:
+        client.close()
+
+
 def test_pagination_crosses_empty_page_and_deduplicates() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         token = request.url.params.get("pageToken")
