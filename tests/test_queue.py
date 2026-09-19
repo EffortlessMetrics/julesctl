@@ -8,6 +8,7 @@ from julesctl.config import Settings
 from julesctl.controller import JulesController
 from julesctl.domain.errors import InputError
 from julesctl.domain.models import DispatchSpec
+from julesctl.queue_store import CandidateQueueStore
 from julesctl.store import StateStore
 
 
@@ -34,7 +35,7 @@ def test_candidate_file_rejects_symlink(tmp_path: Path) -> None:
 
 
 def test_duplicate_dispatch_key_requires_identical_candidate(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "state.db")
+    store = CandidateQueueStore(tmp_path / "state.db")
     try:
         first = enqueue_candidate(store, _spec("same"))
         second = enqueue_candidate(store, _spec("same"))
@@ -48,7 +49,7 @@ def test_duplicate_dispatch_key_requires_identical_candidate(tmp_path: Path) -> 
 
 
 def test_claim_release_and_complete_are_transactional(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "state.db")
+    store = CandidateQueueStore(tmp_path / "state.db")
     try:
         queued = enqueue_candidate(store, _spec("one"))
         candidate_id = str(queued["candidate_id"])
@@ -68,12 +69,12 @@ def test_worker_enforces_repo_allowlist_and_records_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = Settings(api_key="key", database_path=tmp_path / "state.db")
-    store = StateStore(settings.database_path)
+    queue = CandidateQueueStore(settings.database_path)
     try:
-        enqueue_candidate(store, _spec("allowed", repo="acme/repo"))
-        enqueue_candidate(store, _spec("blocked", repo="other/repo"))
+        enqueue_candidate(queue, _spec("allowed", repo="acme/repo"))
+        enqueue_candidate(queue, _spec("blocked", repo="other/repo"))
     finally:
-        store.close()
+        queue.close()
 
     dispatched: list[str] = []
 
@@ -106,7 +107,7 @@ def test_worker_enforces_repo_allowlist_and_records_results(
     assert dispatched == ["allowed"]
     assert [item["outcome"] for item in outcomes] == ["created", "rejected_policy"]
 
-    check = StateStore(settings.database_path)
+    check = CandidateQueueStore(settings.database_path)
     try:
         assert check.candidate_counts() == {"COMPLETED": 1, "REJECTED_POLICY": 1}
     finally:
