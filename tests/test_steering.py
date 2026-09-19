@@ -75,9 +75,7 @@ def test_approval_lost_response_reconciles_from_new_activity() -> None:
         if request.url.path.endswith("/sessions/1"):
             state = "IN_PROGRESS" if posted else "AWAITING_PLAN_APPROVAL"
             return httpx.Response(200, json={"name": "sessions/1", "id": "1", "state": state})
-        activities = [
-            {"name": "sessions/1/activities/plan", "id": "plan", "planGenerated": {}}
-        ]
+        activities = [{"name": "sessions/1/activities/plan", "id": "plan", "planGenerated": {}}]
         if posted:
             activities.append(
                 {"name": "sessions/1/activities/approved", "id": "approved", "planApproved": {}}

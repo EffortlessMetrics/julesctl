@@ -21,8 +21,7 @@ def state_root() -> Path:
     if system == "Darwin":
         return Path.home() / "Library" / "Application Support" / "julesctl"
     return (
-        Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
-        / "julesctl"
+        Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))) / "julesctl"
     )
 
 

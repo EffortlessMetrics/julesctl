@@ -50,8 +50,7 @@ def message_once(api: JulesApiClient, session_id: str, prompt: str) -> dict[str,
                 "original_api_status": exc.api_status,
             }
         raise IndeterminateError(
-            "message outcome is indeterminate; "
-            f"new matching userMessaged activities={matches}"
+            f"message outcome is indeterminate; new matching userMessaged activities={matches}"
         ) from exc
 
 
@@ -77,11 +76,11 @@ def approve_once(api: JulesApiClient, session_id: str) -> dict[str, object]:
             _activity_identity(activity) not in before_ids and activity.plan_approved is not None
             for activity in _activities(api, session_id)
         )
-        moved = (
-            before_session.state in {None, "STATE_UNSPECIFIED", "AWAITING_PLAN_APPROVAL"}
-            and after_session.state
-            not in {None, "STATE_UNSPECIFIED", "AWAITING_PLAN_APPROVAL"}
-        )
+        moved = before_session.state in {
+            None,
+            "STATE_UNSPECIFIED",
+            "AWAITING_PLAN_APPROVAL",
+        } and after_session.state not in {None, "STATE_UNSPECIFIED", "AWAITING_PLAN_APPROVAL"}
         if newly_approved or moved:
             return {
                 "outcome": "reconciled",

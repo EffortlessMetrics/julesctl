@@ -134,7 +134,9 @@ def api_check(json_output: Annotated[bool, typer.Option("--json")] = False) -> N
 def source_list(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
     try:
         with _controller() as ctl:
-            items = [s.model_dump(by_alias=True, exclude_none=True) for s in ctl.ctx.api.iter_sources()]
+            items = [
+                s.model_dump(by_alias=True, exclude_none=True) for s in ctl.ctx.api.iter_sources()
+            ]
         if json_output:
             emit_json(operation("source.list", "completed", {"items": items}))
         else:
@@ -337,8 +339,12 @@ def _bulk_lifecycle(
                     )
                     items.append(result)
                 except JulesCtlError as exc:
-                    items.append({"session_id": sid, "outcome": "error", "error": _error_details(exc)})
-        outcome = "partial" if any(item.get("outcome") == "error" for item in items) else "completed"
+                    items.append(
+                        {"session_id": sid, "outcome": "error", "error": _error_details(exc)}
+                    )
+        outcome = (
+            "partial" if any(item.get("outcome") == "error" for item in items) else "completed"
+        )
         if json_output:
             emit_json(operation(command, outcome, {"items": items}))
         else:
@@ -374,7 +380,9 @@ def session_unarchive(
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     if not yes:
-        _error("session.unarchive", InputError("--yes is required for unarchive"), machine=json_output)
+        _error(
+            "session.unarchive", InputError("--yes is required for unarchive"), machine=json_output
+        )
     _bulk_lifecycle(
         "session.unarchive",
         session_ids,
@@ -410,7 +418,9 @@ def session_delete(
                     items.append(
                         {"session_id": session_id, "outcome": "error", "error": _error_details(exc)}
                     )
-        outcome = "partial" if any(item.get("outcome") == "error" for item in items) else "completed"
+        outcome = (
+            "partial" if any(item.get("outcome") == "error" for item in items) else "completed"
+        )
         if json_output:
             emit_json(operation("session.delete", outcome, {"items": items}))
         else:

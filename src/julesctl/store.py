@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from .domain.errors import AdmissionError, InputError
 
@@ -110,12 +110,8 @@ class StateStore:
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
-        self._conn.execute(
-            "INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_frozen','0')"
-        )
-        self._conn.execute(
-            "INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_generation','0')"
-        )
+        self._conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_frozen','0')")
+        self._conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_generation','0')")
 
     def close(self) -> None:
         self._conn.close()
@@ -164,12 +160,14 @@ class StateStore:
                 )
                 if rows:
                     conn.execute(
-                        "UPDATE dispatch_attempts SET state='CANCELLED_LOCAL',resolved_at=CURRENT_TIMESTAMP "
+                        "UPDATE dispatch_attempts SET state='CANCELLED_LOCAL',"
+                        "resolved_at=CURRENT_TIMESTAMP "
                         "WHERE state='RESERVED'"
                     )
                     for row in rows:
                         conn.execute(
-                            "UPDATE work_items SET status='CANCELLED_LOCAL',updated_at=CURRENT_TIMESTAMP "
+                            "UPDATE work_items SET status='CANCELLED_LOCAL',"
+                            "updated_at=CURRENT_TIMESTAMP "
                             "WHERE dispatch_key=?",
                             (row["dispatch_key"],),
                         )
@@ -246,7 +244,8 @@ class StateStore:
                     )
             generation = int(self._meta_value(conn, "fleet_generation", "0"))
             conn.execute(
-                "INSERT INTO work_items(dispatch_key,fingerprint,attempt_id,status) VALUES(?,?,?,?)",
+                "INSERT INTO work_items(dispatch_key,fingerprint,"
+                "attempt_id,status) VALUES(?,?,?,?)",
                 (dispatch_key, fingerprint, attempt_id, "RESERVED"),
             )
             conn.execute(
@@ -359,8 +358,7 @@ class StateStore:
             if not row:
                 raise InputError(f"unknown attempt {attempt_id}")
             conflict = conn.execute(
-                "SELECT attempt_id FROM dispatch_attempts "
-                "WHERE session_id=? AND attempt_id<>?",
+                "SELECT attempt_id FROM dispatch_attempts WHERE session_id=? AND attempt_id<>?",
                 (session_id, attempt_id),
             ).fetchone()
             if conflict:
@@ -484,9 +482,7 @@ class StateStore:
             (plan_id, json.dumps(selector, sort_keys=True), json.dumps(targets), "PLANNED"),
         )
 
-    def get_deletion_plan(
-        self, plan_id: str
-    ) -> tuple[dict[str, object], list[dict[str, object]]]:
+    def get_deletion_plan(self, plan_id: str) -> tuple[dict[str, object], list[dict[str, object]]]:
         row = self._conn.execute(
             "SELECT selector_json,targets_json FROM deletion_plans WHERE plan_id=?", (plan_id,)
         ).fetchone()

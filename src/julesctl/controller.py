@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
@@ -66,11 +67,7 @@ class JulesController:
         context = session.source_context
         if not context:
             return None, None, None
-        start = (
-            context.github_repo_context.starting_branch
-            if context.github_repo_context
-            else None
-        )
+        start = context.github_repo_context.starting_branch if context.github_repo_context else None
         return context.source, start, context.working_branch
 
     def _remember_session(
@@ -170,9 +167,7 @@ class JulesController:
                 "title": spec.title,
                 "require_plan_approval": spec.require_plan_approval,
                 "automation_mode": (
-                    "AUTO_CREATE_PR"
-                    if spec.auto_create_pr
-                    else "AUTOMATION_MODE_UNSPECIFIED"
+                    "AUTO_CREATE_PR" if spec.auto_create_pr else "AUTOMATION_MODE_UNSPECIFIED"
                 ),
                 "environment_variables_enabled": None,
             }
@@ -291,9 +286,7 @@ class JulesController:
                 "prompt_sha256": prompt_hash,
                 "require_plan_approval": spec.require_plan_approval,
                 "automation_mode": (
-                    "AUTO_CREATE_PR"
-                    if spec.auto_create_pr
-                    else "AUTOMATION_MODE_UNSPECIFIED"
+                    "AUTO_CREATE_PR" if spec.auto_create_pr else "AUTOMATION_MODE_UNSPECIFIED"
                 ),
                 "environment_variables_enabled": None,
             },
@@ -385,7 +378,7 @@ class JulesController:
             "attempt_id": attempt_id,
         }
 
-    def _candidate_matches(self, attempt: object, session: SessionWire) -> bool:
+    def _candidate_matches(self, attempt: sqlite3.Row, session: SessionWire) -> bool:
         source, start, working = self._session_source(session)
         if source != attempt["source_name"]:
             return False
@@ -401,7 +394,10 @@ class JulesController:
             expected = bool(attempt["require_plan_approval"])
             if session.require_plan_approval is not expected:
                 return False
-        if session.automation_mode is not None and session.automation_mode != attempt["automation_mode"]:
+        if (
+            session.automation_mode is not None
+            and session.automation_mode != attempt["automation_mode"]
+        ):
             return False
         sent_at = attempt["send_started_at"]
         if sent_at and session.create_time:
@@ -512,11 +508,7 @@ class JulesController:
 
     def session_result(self, session_id: str) -> dict[str, object]:
         session = self.ctx.api.get_session(session_id)
-        origin = (
-            "managed"
-            if session.id in self.ctx.store.managed_session_ids()
-            else "external"
-        )
+        origin = "managed" if session.id in self.ctx.store.managed_session_ids() else "external"
         self._remember_session(session, origin=origin)
         activities = [
             activity.model_dump(by_alias=True, exclude_none=True)
@@ -563,9 +555,7 @@ class JulesController:
                 else:
                     already_absent += 1
             except ApiError as exc:
-                failed.append(
-                    {"session_id": sid, "status": exc.http_status, "error": str(exc)}
-                )
+                failed.append({"session_id": sid, "status": exc.http_status, "error": str(exc)})
         return {
             "plan_id": plan_id,
             "deleted": deleted,
@@ -598,8 +588,6 @@ class JulesController:
                 "rolling_start_reserve": self.ctx.settings.rolling_start_reserve,
             },
             "managed_starts_rolling_24h": self.ctx.store.starts_last_24h(),
-            "available_new_work_slots": max(
-                self.ctx.settings.new_work_target - occupied, 0
-            ),
+            "available_new_work_slots": max(self.ctx.settings.new_work_target - occupied, 0),
             "coverage": "best_effort",
         }

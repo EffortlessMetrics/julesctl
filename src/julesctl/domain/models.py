@@ -34,9 +34,13 @@ class GitHubRepoContextWire(BaseModel):
 class SourceContextWire(BaseModel):
     model_config = ConfigDict(extra="allow")
     source: str | None = None
-    github_repo_context: GitHubRepoContextWire | None = Field(default=None, alias="githubRepoContext")
+    github_repo_context: GitHubRepoContextWire | None = Field(
+        default=None, alias="githubRepoContext"
+    )
     working_branch: str | None = Field(default=None, alias="workingBranch")
-    environment_variables_enabled: bool | None = Field(default=None, alias="environmentVariablesEnabled")
+    environment_variables_enabled: bool | None = Field(
+        default=None, alias="environmentVariablesEnabled"
+    )
 
 
 class PullRequestWire(BaseModel):
@@ -126,7 +130,9 @@ class ActivityWire(BaseModel):
 
 class DispatchSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
-    schema_id: Literal["julesctl.dispatch.v1"] = Field(default="julesctl.dispatch.v1", alias="schema")
+    schema_id: Literal["julesctl.dispatch.v1"] = Field(
+        default="julesctl.dispatch.v1", alias="schema"
+    )
     dispatch_key: str
     work_definition: str | None = None
     occurrence: str | None = None
@@ -145,6 +151,8 @@ class DispatchSpec(BaseModel):
     @field_validator("repo")
     @classmethod
     def validate_repo(cls, value: str | None) -> str | None:
-        if value is not None and (value.count("/") != 1 or value.startswith("/") or value.endswith("/")):
+        if value is not None and (
+            value.count("/") != 1 or value.startswith("/") or value.endswith("/")
+        ):
             raise ValueError("repo must be owner/repo")
         return value
