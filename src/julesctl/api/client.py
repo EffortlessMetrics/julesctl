@@ -10,6 +10,8 @@ import httpx
 from ..domain.errors import ApiError
 from ..domain.models import ActivityWire, SessionWire, SourceWire
 
+QueryValue = str | int | float | bool | None
+
 
 class JulesApiClient:
     """Small, security-conscious adapter for the Jules v1alpha REST API."""
@@ -81,7 +83,7 @@ class JulesApiClient:
         method: str,
         path: str,
         *,
-        params: dict[str, object] | None = None,
+        params: dict[str, QueryValue] | None = None,
         json_body: dict[str, object] | None = None,
     ) -> httpx.Response:
         try:
@@ -102,7 +104,7 @@ class JulesApiClient:
         self,
         path: str,
         *,
-        params: dict[str, object] | None = None,
+        params: dict[str, QueryValue] | None = None,
         attempts: int = 4,
     ) -> httpx.Response:
         delay = 0.25
@@ -133,7 +135,7 @@ class JulesApiClient:
         *,
         item_key: str,
         page_size: int,
-        params: dict[str, object] | None = None,
+        params: dict[str, QueryValue] | None = None,
         max_pages: int = 10_000,
     ) -> Iterator[dict[str, Any]]:
         if not 1 <= page_size <= 100:
@@ -141,7 +143,7 @@ class JulesApiClient:
         token: str | None = None
         seen_tokens: set[str] = set()
         seen_names: set[str] = set()
-        base = dict(params or {})
+        base: dict[str, QueryValue] = dict(params or {})
         for _ in range(max_pages):
             query = dict(base)
             query["pageSize"] = page_size
@@ -202,7 +204,7 @@ class JulesApiClient:
         page_size: int = 100,
         filter_value: str | None = None,
     ) -> Iterable[SessionWire]:
-        params: dict[str, object] = {}
+        params: dict[str, QueryValue] = {}
         if filter_value:
             params["filter"] = filter_value
         for item in self._iter_pages(
@@ -273,7 +275,7 @@ class JulesApiClient:
         filter_value: str | None = None,
     ) -> Iterable[ActivityWire]:
         sid = session_id.removeprefix("sessions/")
-        params: dict[str, object] = {}
+        params: dict[str, QueryValue] = {}
         if filter_value:
             params["filter"] = filter_value
         for item in self._iter_pages(
