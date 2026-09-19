@@ -33,6 +33,7 @@ jobs:
       - name: Commit verified non-workflow changes
         shell: bash
         run: |
+          git reset
           git restore --source=HEAD -- .github/workflows/ci.yml
           rm -f .github/dependabot.yml .github/workflows/release-build.yml .github/workflows/security.yml
           git config user.name EffortlessSteven
