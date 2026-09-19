@@ -8,7 +8,7 @@ from ..config import Settings
 from ..controller import JulesController
 from ..domain.errors import AdmissionError, IndeterminateError, InputError, JulesCtlError
 from ..domain.models import DispatchSpec
-from ..store import StateStore
+from ..queue_store import CandidateQueueStore
 from ..timestamps import GoogleTimestamp
 
 MAX_CANDIDATE_BYTES = 256 * 1024
@@ -53,7 +53,10 @@ def canonical_spec(spec: DispatchSpec) -> str:
     )
 
 
-def enqueue_candidate(store: StateStore, spec: DispatchSpec) -> dict[str, object]:
+def enqueue_candidate(
+    store: CandidateQueueStore,
+    spec: DispatchSpec,
+) -> dict[str, object]:
     candidate_id = str(uuid.uuid4())
     return store.enqueue_candidate(
         candidate_id=candidate_id,
@@ -62,7 +65,11 @@ def enqueue_candidate(store: StateStore, spec: DispatchSpec) -> dict[str, object
     )
 
 
-def queue_status(store: StateStore, *, limit: int = 100) -> dict[str, object]:
+def queue_status(
+    store: CandidateQueueStore,
+    *,
+    limit: int = 100,
+) -> dict[str, object]:
     return {
         "counts": store.candidate_counts(),
         "items": store.list_candidates(limit=limit),
@@ -102,112 +109,127 @@ def run_worker_once(
     allowed = {repo.casefold() for repo in allow_repos}
     worker_id = str(uuid.uuid4())
     outcomes: list[dict[str, object]] = []
-    with JulesController.from_settings(settings) as controller:
-        store = controller.ctx.store
-        store.requeue_stale_candidates(older_than_seconds=stale_claim_seconds)
-        claimed = store.claim_candidates(limit=max_items, worker_id=worker_id)
-        for row in claimed:
-            candidate_id = str(row["candidate_id"])
-            try:
-                spec = DispatchSpec.model_validate_json(str(row["spec_json"]))
-            except ValueError as exc:
-                error: dict[str, object] = {
-                    "kind": "invalid_candidate",
-                    "message": str(exc),
-                }
-                store.finish_candidate(candidate_id, state="FAILED", error=error)
-                outcomes.append(
-                    {
-                        "candidate_id": candidate_id,
-                        "dispatch_key": row["dispatch_key"],
-                        "outcome": "failed",
-                        "error": error,
-                    }
-                )
-                continue
-
-            if spec.expires_at is not None:
+    with CandidateQueueStore(
+        settings.database_path,
+        profile_name=settings.profile,
+    ) as queue:
+        queue.requeue_stale_candidates(older_than_seconds=stale_claim_seconds)
+        claimed = queue.claim_candidates(limit=max_items, worker_id=worker_id)
+        with JulesController.from_settings(settings) as controller:
+            for row in claimed:
+                candidate_id = str(row["candidate_id"])
                 try:
-                    expired = (
-                        GoogleTimestamp.parse(spec.expires_at).unix_nanoseconds
-                        <= GoogleTimestamp.now().unix_nanoseconds
-                    )
-                except ValueError:
-                    expired = True
-                if expired:
-                    store.finish_candidate(candidate_id, state="EXPIRED")
+                    spec = DispatchSpec.model_validate_json(str(row["spec_json"]))
+                except ValueError as exc:
+                    error: dict[str, object] = {
+                        "kind": "invalid_candidate",
+                        "message": str(exc),
+                    }
+                    queue.finish_candidate(candidate_id, state="FAILED", error=error)
                     outcomes.append(
                         {
                             "candidate_id": candidate_id,
-                            "dispatch_key": spec.dispatch_key,
-                            "outcome": "expired",
+                            "dispatch_key": row["dispatch_key"],
+                            "outcome": "failed",
+                            "error": error,
                         }
                     )
                     continue
 
-            if not _candidate_allowed(
-                spec,
-                allowed_repos=allowed,
-                allow_repoless=allow_repoless,
-            ):
-                error = {
-                    "kind": "repository_not_allowed",
-                    "message": f"candidate repository is not allowed: {spec.repo!r}",
-                }
-                store.finish_candidate(candidate_id, state="REJECTED_POLICY", error=error)
-                outcomes.append(
-                    {
-                        "candidate_id": candidate_id,
-                        "dispatch_key": spec.dispatch_key,
-                        "outcome": "rejected_policy",
-                        "error": error,
-                    }
-                )
-                continue
+                if spec.expires_at is not None:
+                    try:
+                        expired = (
+                            GoogleTimestamp.parse(spec.expires_at).unix_nanoseconds
+                            <= GoogleTimestamp.now().unix_nanoseconds
+                        )
+                    except ValueError:
+                        expired = True
+                    if expired:
+                        queue.finish_candidate(candidate_id, state="EXPIRED")
+                        outcomes.append(
+                            {
+                                "candidate_id": candidate_id,
+                                "dispatch_key": spec.dispatch_key,
+                                "outcome": "expired",
+                            }
+                        )
+                        continue
 
-            try:
-                result = controller.dispatch(spec)
-            except AdmissionError as exc:
-                store.release_candidate(candidate_id)
-                outcomes.append(
-                    {
-                        "candidate_id": candidate_id,
-                        "dispatch_key": spec.dispatch_key,
-                        "outcome": "deferred",
-                        "error": _error_record(exc),
+                if not _candidate_allowed(
+                    spec,
+                    allowed_repos=allowed,
+                    allow_repoless=allow_repoless,
+                ):
+                    error = {
+                        "kind": "repository_not_allowed",
+                        "message": f"candidate repository is not allowed: {spec.repo!r}",
                     }
-                )
-                break
-            except IndeterminateError as exc:
-                error = _error_record(exc)
-                store.finish_candidate(candidate_id, state="INDETERMINATE", error=error)
-                outcomes.append(
-                    {
-                        "candidate_id": candidate_id,
-                        "dispatch_key": spec.dispatch_key,
-                        "outcome": "indeterminate",
-                        "error": error,
-                    }
-                )
-            except JulesCtlError as exc:
-                error = _error_record(exc)
-                store.finish_candidate(candidate_id, state="FAILED", error=error)
-                outcomes.append(
-                    {
-                        "candidate_id": candidate_id,
-                        "dispatch_key": spec.dispatch_key,
-                        "outcome": "failed",
-                        "error": error,
-                    }
-                )
-            else:
-                store.finish_candidate(candidate_id, state="COMPLETED", outcome=result)
-                outcomes.append(
-                    {
-                        "candidate_id": candidate_id,
-                        "dispatch_key": spec.dispatch_key,
-                        "outcome": result.get("outcome", "completed"),
-                        "dispatch": result,
-                    }
-                )
+                    queue.finish_candidate(
+                        candidate_id,
+                        state="REJECTED_POLICY",
+                        error=error,
+                    )
+                    outcomes.append(
+                        {
+                            "candidate_id": candidate_id,
+                            "dispatch_key": spec.dispatch_key,
+                            "outcome": "rejected_policy",
+                            "error": error,
+                        }
+                    )
+                    continue
+
+                try:
+                    result = controller.dispatch(spec)
+                except AdmissionError as exc:
+                    queue.release_candidate(candidate_id)
+                    outcomes.append(
+                        {
+                            "candidate_id": candidate_id,
+                            "dispatch_key": spec.dispatch_key,
+                            "outcome": "deferred",
+                            "error": _error_record(exc),
+                        }
+                    )
+                    break
+                except IndeterminateError as exc:
+                    error = _error_record(exc)
+                    queue.finish_candidate(
+                        candidate_id,
+                        state="INDETERMINATE",
+                        error=error,
+                    )
+                    outcomes.append(
+                        {
+                            "candidate_id": candidate_id,
+                            "dispatch_key": spec.dispatch_key,
+                            "outcome": "indeterminate",
+                            "error": error,
+                        }
+                    )
+                except JulesCtlError as exc:
+                    error = _error_record(exc)
+                    queue.finish_candidate(candidate_id, state="FAILED", error=error)
+                    outcomes.append(
+                        {
+                            "candidate_id": candidate_id,
+                            "dispatch_key": spec.dispatch_key,
+                            "outcome": "failed",
+                            "error": error,
+                        }
+                    )
+                else:
+                    queue.finish_candidate(
+                        candidate_id,
+                        state="COMPLETED",
+                        outcome=result,
+                    )
+                    outcomes.append(
+                        {
+                            "candidate_id": candidate_id,
+                            "dispatch_key": spec.dispatch_key,
+                            "outcome": result.get("outcome", "completed"),
+                            "dispatch": result,
+                        }
+                    )
     return outcomes
