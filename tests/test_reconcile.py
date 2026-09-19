@@ -18,12 +18,12 @@ def _activity(activity_id: str, create_time: str, *, event: str = "progressUpdat
 
 def test_incremental_reconcile_uses_overlap_and_deduplicates(tmp_path: Path) -> None:
     calls = 0
-    observed_filters: list[str | None] = []
+    observed_cursors: list[str | None] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        observed_filters.append(request.url.params.get("filter"))
+        observed_cursors.append(request.url.params.get("createTime"))
         if calls == 1:
             activities = [_activity("a", "2026-09-19T01:00:00.000000000Z")]
         else:
@@ -41,9 +41,9 @@ def test_incremental_reconcile_uses_overlap_and_deduplicates(tmp_path: Path) -> 
         second = reconcile_session_activities(api, store, "1", origin="managed")
         assert [item["activity_id"] for item in first] == ["a"]
         assert [item["activity_id"] for item in second] == ["b", "c"]
-        assert observed_filters[0] is None
-        assert observed_filters[1] is not None
-        assert "2026-09-19T00:59:55" in str(observed_filters[1])
+        assert observed_cursors[0] is None
+        assert observed_cursors[1] is not None
+        assert "2026-09-19T00:59:55" in str(observed_cursors[1])
         assert store.activity_cursor("1") == "2026-09-19T01:00:01.000000000Z"
     finally:
         store.close()
@@ -52,12 +52,12 @@ def test_incremental_reconcile_uses_overlap_and_deduplicates(tmp_path: Path) -> 
 
 def test_filter_rejection_falls_back_to_complete_history(tmp_path: Path) -> None:
     phase = 0
-    filters: list[str | None] = []
+    cursors: list[str | None] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal phase
-        value = request.url.params.get("filter")
-        filters.append(value)
+        value = request.url.params.get("createTime")
+        cursors.append(value)
         if phase == 0:
             phase = 1
             return httpx.Response(
@@ -86,8 +86,8 @@ def test_filter_rejection_falls_back_to_complete_history(tmp_path: Path) -> None
         events = reconcile_session_activities(api, store, "1", origin="external")
         assert [item["activity_id"] for item in events] == ["b"]
         assert events[0]["activity_filter_fallback"] is True
-        assert filters[-2] is not None
-        assert filters[-1] is None
+        assert cursors[-2] is not None
+        assert cursors[-1] is None
     finally:
         store.close()
         api.close()

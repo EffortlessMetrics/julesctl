@@ -119,10 +119,9 @@ class JulesController:
         return {"repo": repo, "source_name": source.name, "default_branch": default}
 
     def list_sessions(self, *, all_history: bool = False) -> list[dict[str, object]]:
-        filter_value = "archived = true OR archived = false" if all_history else None
         managed = self.ctx.store.managed_session_ids()
         result: list[dict[str, object]] = []
-        sessions = list(self.ctx.api.iter_sessions(filter_value=filter_value))
+        sessions = list(self.ctx.api.iter_sessions())
         seen_ids = {session.id for session in sessions}
         for session in sessions:
             origin = "managed" if session.id in managed else "external"

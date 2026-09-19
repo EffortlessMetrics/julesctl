@@ -26,10 +26,10 @@ def _timestamp_nanoseconds(value: str | None) -> int | None:
         return None
 
 
-def _activity_filter(cursor: str, *, overlap_seconds: int) -> str:
+def _activity_cursor(cursor: str, *, overlap_seconds: int) -> str:
     cursor_ns = GoogleTimestamp.parse(cursor).unix_nanoseconds
     overlap_ns = max(cursor_ns - overlap_seconds * 1_000_000_000, 0)
-    return f'create_time > "{_rfc3339_from_nanoseconds(overlap_ns)}"'
+    return _rfc3339_from_nanoseconds(overlap_ns)
 
 
 def _artifact_summary(activity: ActivityWire) -> list[str]:
@@ -84,14 +84,14 @@ def reconcile_session_activities(
     """Fetch and commit only activities not already present in the local ledger."""
 
     cursor = store.activity_cursor(session_id)
-    filter_value = (
-        _activity_filter(cursor, overlap_seconds=overlap_seconds) if cursor is not None else None
+    create_time = (
+        _activity_cursor(cursor, overlap_seconds=overlap_seconds) if cursor is not None else None
     )
     fallback_used = False
     try:
-        activities = list(api.iter_activities(session_id, filter_value=filter_value))
+        activities = list(api.iter_activities(session_id, create_time=create_time))
     except ApiError as exc:
-        if filter_value is None or exc.http_status != 400:
+        if create_time is None or exc.http_status != 400:
             raise
         fallback_used = True
         activities = list(api.iter_activities(session_id))
