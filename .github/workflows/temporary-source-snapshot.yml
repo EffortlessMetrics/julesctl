@@ -1,0 +1,26 @@
+name: Temporary source snapshot
+
+on:
+  push:
+    branches: [chore/source-snapshot]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: false
+      - name: Create source archive
+        run: tar --exclude=.git --exclude=.github/workflows/temporary-source-snapshot.yml -czf /tmp/julesctl-source.tar.gz .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: julesctl-current-source
+          path: /tmp/julesctl-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
