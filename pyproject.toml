@@ -53,3 +53,6 @@ mypy_path = "src"
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+markers = [
+  "live: opt-in tests that access the real Jules API and consume live account state",
+]
