@@ -1,0 +1,203 @@
+name: Temporary profile state patch
+
+on:
+  push:
+    branches: [feat/profile-state-migrations]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev]'
+      - name: Add profile-scoped migration controls
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          store_path = Path("src/julesctl/store.py")
+          store = store_path.read_text(encoding="utf-8")
+          if "from datetime import UTC, datetime" not in store:
+              store = store.replace(
+                  "import sqlite3\n",
+                  "import sqlite3\nfrom datetime import UTC, datetime\n",
+                  1,
+              )
+          if "_SCHEMA_VERSION = 1" not in store:
+              store = store.replace(
+                  ")\n\n_SCHEMA =",
+                  ")\n\n_SCHEMA_VERSION = 1\n\n_SCHEMA =",
+                  1,
+              )
+
+          lines = store.splitlines(keepends=True)
+          try:
+              start = next(i for i, line in enumerate(lines) if line.startswith("    def __init__("))
+              end = next(
+                  i
+                  for i, line in enumerate(lines[start + 1 :], start + 1)
+                  if line.startswith("    def close(")
+              )
+          except StopIteration as exc:
+              raise SystemExit("StateStore constructor markers not found") from exc
+
+          replacement = [
+              "    def __init__(self, path: Path, *, profile_name: str = \"default\") -> None:\n",
+              "        path.parent.mkdir(parents=True, exist_ok=True)\n",
+              "        self.path = path\n",
+              "        existed = path.exists() and path.stat().st_size > 0\n",
+              "        self._conn = sqlite3.connect(path, timeout=5, isolation_level=None)\n",
+              "        self._conn.row_factory = sqlite3.Row\n",
+              "        self._conn.execute(\"PRAGMA journal_mode=WAL\")\n",
+              "        self._conn.execute(\"PRAGMA foreign_keys=ON\")\n",
+              "        self._conn.execute(\"PRAGMA busy_timeout=5000\")\n",
+              "        current_version = int(self._conn.execute(\"PRAGMA user_version\").fetchone()[0])\n",
+              "        if current_version > _SCHEMA_VERSION:\n",
+              "            self._conn.close()\n",
+              "            raise InputError(\n",
+              "                f\"state database schema {current_version} is newer than supported \"\n",
+              "                f\"schema {_SCHEMA_VERSION}\"\n",
+              "            )\n",
+              "        if current_version < _SCHEMA_VERSION and existed:\n",
+              "            stamp = datetime.now(UTC).strftime(\"%Y%m%dT%H%M%SZ\")\n",
+              "            backup_path = path.with_name(\n",
+              "                f\"{path.stem}.bak-v{current_version}-{stamp}{path.suffix}\"\n",
+              "            )\n",
+              "            backup = sqlite3.connect(backup_path)\n",
+              "            try:\n",
+              "                self._conn.backup(backup)\n",
+              "            finally:\n",
+              "                backup.close()\n",
+              "        self._conn.executescript(_SCHEMA)\n",
+              "        if current_version < _SCHEMA_VERSION:\n",
+              "            self._conn.execute(f\"PRAGMA user_version={_SCHEMA_VERSION}\")\n",
+              "        stored_profile = self._conn.execute(\n",
+              "            \"SELECT value FROM meta WHERE key='profile_name'\"\n",
+              "        ).fetchone()\n",
+              "        if stored_profile is None:\n",
+              "            self._conn.execute(\n",
+              "                \"INSERT INTO meta(key,value) VALUES('profile_name',?)\",\n",
+              "                (profile_name,),\n",
+              "            )\n",
+              "        elif str(stored_profile[\"value\"]) != profile_name:\n",
+              "            self._conn.close()\n",
+              "            raise InputError(\n",
+              "                f\"state database belongs to profile {stored_profile['value']!r}, \"\n",
+              "                f\"not {profile_name!r}\"\n",
+              "            )\n",
+              "        self._conn.execute(\n",
+              "            \"INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_frozen','0')\"\n",
+              "        )\n",
+              "        self._conn.execute(\n",
+              "            \"INSERT OR IGNORE INTO meta(key,value) VALUES('fleet_generation','0')\"\n",
+              "        )\n",
+              "\n",
+              "    def schema_version(self) -> int:\n",
+              "        return int(self._conn.execute(\"PRAGMA user_version\").fetchone()[0])\n",
+              "\n",
+              "    def integrity_check(self) -> list[str]:\n",
+              "        return [str(row[0]) for row in self._conn.execute(\"PRAGMA integrity_check\")]\n",
+              "\n",
+          ]
+          lines[start:end] = replacement
+          store_path.write_text("".join(lines), encoding="utf-8")
+
+          controller_path = Path("src/julesctl/controller.py")
+          controller = controller_path.read_text(encoding="utf-8")
+          controller = controller.replace(
+              "StateStore(settings.database_path)",
+              "StateStore(settings.database_path, profile_name=settings.profile)",
+          )
+          controller_path.write_text(controller, encoding="utf-8")
+
+          cli_path = Path("src/julesctl/cli/app.py")
+          cli = cli_path.read_text(encoding="utf-8")
+          cli = cli.replace(
+              "from ..config import Settings, default_database_path\n",
+              "from ..config import Settings, default_database_path, profile_name\n",
+              1,
+          )
+          cli = cli.replace(
+              "fleet_app = typer.Typer(help=\"Account fleet control\")\n",
+              "fleet_app = typer.Typer(help=\"Account fleet control\")\n"
+              "state_app = typer.Typer(help=\"Local controller state\")\n",
+              1,
+          )
+          cli = cli.replace(
+              "app.add_typer(fleet_app, name=\"fleet\")\n",
+              "app.add_typer(fleet_app, name=\"fleet\")\n"
+              "app.add_typer(state_app, name=\"state\")\n",
+              1,
+          )
+          cli = cli.replace(
+              "store = StateStore(default_database_path())",
+              "selected_profile = profile_name()\n        store = StateStore(\n"
+              "            default_database_path(selected_profile),\n"
+              "            profile_name=selected_profile,\n"
+              "        )",
+          )
+          state_command = "\n".join(
+              [
+                  "",
+                  "@state_app.command(\"check\")",
+                  "def state_check(",
+                  "    json_output: Annotated[bool, typer.Option(\"--json\")] = False,",
+                  ") -> None:",
+                  "    try:",
+                  "        selected_profile = profile_name()",
+                  "        path = default_database_path(selected_profile)",
+                  "        store = StateStore(path, profile_name=selected_profile)",
+                  "        try:",
+                  "            result = {",
+                  "                \"profile\": selected_profile,",
+                  "                \"path\": str(path),",
+                  "                \"schema_version\": store.schema_version(),",
+                  "                \"integrity\": store.integrity_check(),",
+                  "                \"unresolved_attempts\": store.unresolved_attempt_count(),",
+                  "            }",
+                  "        finally:",
+                  "            store.close()",
+                  "        if json_output:",
+                  "            emit_json(operation(\"state.check\", \"completed\", result))",
+                  "        else:",
+                  "            console.print(result)",
+                  "    except (JulesCtlError, ValueError) as exc:",
+                  "        _error(\"state.check\", exc, machine=json_output)",
+                  "",
+                  "",
+              ]
+          )
+          marker = "@fleet_app.command(\"status\")\n"
+          if "def state_check(" not in cli:
+              if marker not in cli:
+                  raise SystemExit("fleet status marker not found")
+              cli = cli.replace(marker, state_command + marker, 1)
+          cli_path.write_text(cli, encoding="utf-8")
+          PY
+          python -m compileall -q src/julesctl
+          ruff format .
+          ruff check --fix .
+          mypy
+          pytest
+      - name: Commit profile state implementation
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name EffortlessSteven
+          git config user.email 15812269+EffortlessSteven@users.noreply.github.com
+          git add -A
+          git commit -m 'feat(state): version and isolate controller profiles'
+          git push origin HEAD:${{ github.ref_name }}
