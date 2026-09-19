@@ -31,35 +31,22 @@ jobs:
 
           prune = Path("src/julesctl/application/prune.py")
           text = prune.read_text(encoding="utf-8")
-          old = '''        current = select_prune_targets(
-              list_sessions(),
-              states=list(selector.get("states") or []) or None,
-          '''
-          new = '''        raw_states = selector.get("states")
-              if raw_states is None:
-                  states = None
-              elif isinstance(raw_states, list) and all(
-                  isinstance(item, str) for item in raw_states
-              ):
-                  states = list(raw_states) or None
-              else:
-                  raise InputError("stored deletion selector has invalid states")
-              current = select_prune_targets(
-                  list_sessions(),
-                  states=states,
-          '''
+          helper = '''\n\ndef _selector_states(selector: dict[str, object]) -> list[str] | None:\n    raw = selector.get("states")\n    if raw is None:\n        return None\n    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):\n        raise InputError("stored deletion selector has invalid states")\n    return list(raw) or None\n'''
+          marker = "\ndef apply_plan_with_settle(\n"
+          if helper not in text:
+              if marker not in text:
+                  raise SystemExit("apply_plan_with_settle marker not found")
+              text = text.replace(marker, helper + marker, 1)
+          old = 'states=list(selector.get("states") or []) or None,'
           if old not in text:
-              raise SystemExit("prune selector typing marker not found")
-          prune.write_text(text.replace(old, new, 1), encoding="utf-8")
+              raise SystemExit("prune selector state expression not found")
+          text = text.replace(old, 'states=_selector_states(selector),', 1)
+          prune.write_text(text, encoding="utf-8")
 
           client = Path("src/julesctl/client.py")
           text = client.read_text(encoding="utf-8")
-          old = '''        targets = [{"session_id": value.removeprefix("sessions/")} for value in session_ids]
-          '''
-          new = '''        targets: list[dict[str, object]] = [
-                  {"session_id": value.removeprefix("sessions/")} for value in session_ids
-              ]
-          '''
+          old = '        targets = [{"session_id": value.removeprefix("sessions/")} for value in session_ids]\n'
+          new = '''        targets: list[dict[str, object]] = [\n            {"session_id": value.removeprefix("sessions/")} for value in session_ids\n        ]\n'''
           if old not in text:
               raise SystemExit("remove-session target typing marker not found")
           client.write_text(text.replace(old, new, 1), encoding="utf-8")
