@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from typing import Annotated
 
@@ -15,29 +14,11 @@ from ..application.queue import (
 from ..config import Settings, default_database_path, profile_name
 from ..domain.errors import JulesCtlError
 from ..queue_store import CandidateQueueStore
-from .output import console, emit_json, emit_jsonl, err_console, operation
+from .common import fail as _error
+from .output import console, emit_json, emit_jsonl, operation
 
 queue_app = typer.Typer(help="Unprivileged candidate queue")
 worker_app = typer.Typer(help="Credentialed queue worker")
-
-
-def _error(command: str, exc: Exception, *, machine: bool) -> None:
-    if machine:
-        emit_json(
-            {
-                "schema": "julesctl.operation.v1",
-                "operation_id": str(uuid.uuid4()),
-                "command": command,
-                "outcome": "error",
-                "error": {
-                    "kind": "queue_error",
-                    "message": str(exc),
-                },
-            }
-        )
-    else:
-        err_console.print(f"[red]{exc}[/red]")
-    raise typer.Exit(getattr(exc, "exit_code", 2)) from exc
 
 
 def _queue_store() -> CandidateQueueStore:
