@@ -26,6 +26,89 @@ jobs:
         run: |
           tr '_-' '/+' < .github/phase19.url.b64 | base64 -d | gzip -d > /tmp/phase19.patch
           git apply --3way /tmp/phase19.patch
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/julesctl/application/artifacts.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              '''        if output.pull_request is not None:
+              item = _pull_request(output.pull_request)
+              identity = str(item.get("url") or item)
+              if identity not in seen_prs:
+                  seen_prs.add(identity)
+                  pull_requests.append(item)
+          ''',
+              '''        if output.pull_request is not None:
+              pr_item = _pull_request(output.pull_request)
+              pr_identity = str(pr_item.get("url") or pr_item)
+              if pr_identity not in seen_prs:
+                  seen_prs.add(pr_identity)
+                  pull_requests.append(pr_item)
+          ''',
+          )
+          text = text.replace(
+              '''        if output.change_set is not None:
+              item = _change_set(output.change_set, surface="session_output")
+              if item is not None:
+                  identity = (
+                      item.get("source"),
+                      item.get("base_commit_id"),
+                      item.get("unidiff_patch"),
+                  )
+                  if identity not in seen_patches:
+                      seen_patches.add(identity)
+                      patches.append(item)
+          ''',
+              '''        if output.change_set is not None:
+              patch_item = _change_set(output.change_set, surface="session_output")
+              if patch_item is not None:
+                  patch_identity = (
+                      patch_item.get("source"),
+                      patch_item.get("base_commit_id"),
+                      patch_item.get("unidiff_patch"),
+                  )
+                  if patch_identity not in seen_patches:
+                      seen_patches.add(patch_identity)
+                      patches.append(patch_item)
+          ''',
+          )
+          text = text.replace(
+              '''            if artifact.change_set is not None:
+                  item = _change_set(
+                      artifact.change_set,
+                      surface="activity",
+                      activity_name=activity.name,
+                  )
+                  if item is not None:
+                      identity = (
+                          item.get("source"),
+                          item.get("base_commit_id"),
+                          item.get("unidiff_patch"),
+                      )
+                      if identity not in seen_patches:
+                          seen_patches.add(identity)
+                          patches.append(item)
+          ''',
+              '''            if artifact.change_set is not None:
+                  activity_patch_item = _change_set(
+                      artifact.change_set,
+                      surface="activity",
+                      activity_name=activity.name,
+                  )
+                  if activity_patch_item is not None:
+                      activity_patch_identity = (
+                          activity_patch_item.get("source"),
+                          activity_patch_item.get("base_commit_id"),
+                          activity_patch_item.get("unidiff_patch"),
+                      )
+                      if activity_patch_identity not in seen_patches:
+                          seen_patches.add(activity_patch_identity)
+                          patches.append(activity_patch_item)
+          ''',
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
           ruff format .
           ruff check --fix .
           mypy
