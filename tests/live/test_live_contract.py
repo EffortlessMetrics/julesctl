@@ -49,9 +49,7 @@ def _wait_terminal(api: JulesApiClient, session_id: str) -> str:
         if last_state in {"COMPLETED", "FAILED", "CANCELLED"}:
             return last_state
         time.sleep(10)
-    pytest.fail(
-        f"session {session_id} did not reach a terminal state; last state={last_state}"
-    )
+    pytest.fail(f"session {session_id} did not reach a terminal state; last state={last_state}")
 
 
 def test_live_read_only_contract() -> None:
@@ -59,9 +57,7 @@ def test_live_read_only_contract() -> None:
 
     with _client() as api:
         sources = list(api.iter_sources())
-        sessions = list(
-            api.iter_sessions(filter_value="archived = true OR archived = false")
-        )
+        sessions = list(api.iter_sessions(filter_value="archived = true OR archived = false"))
         assert all(source.name for source in sources)
         assert all(session.id and session.name for session in sessions)
         if sessions:
@@ -108,9 +104,7 @@ def test_live_source_lifecycle() -> None:
         source = api.resolve_source(repo)
         if not branch:
             if not source.github_repo or not source.github_repo.default_branch:
-                pytest.fail(
-                    "fixture source has no default branch and JULES_TEST_BRANCH is unset"
-                )
+                pytest.fail("fixture source has no default branch and JULES_TEST_BRANCH is unset")
             branch = source.github_repo.default_branch.display_name
         session = api.create_session(
             {
