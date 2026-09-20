@@ -174,7 +174,9 @@ def test_activities_and_message_aliases(monkeypatch) -> None:
     activities_jsonl = runner.invoke(app, ["activities", "1", "--jsonl"])
     assert activities_jsonl.exit_code == 0, activities_jsonl.output
     row = json.loads(activities_jsonl.stdout)
-    assert "data" not in row["artifacts"][0]["media"]
+    jsonl_media = row["artifacts"][0]["media"]
+    assert "data" not in jsonl_media
+    assert jsonl_media == media
     assert row["schema"] == "julesctl.activity.v1"
 
     message = runner.invoke(app, ["msg", "1", "continue", "--json"])
