@@ -332,6 +332,7 @@ def test_settle_verification_failure_preserves_delete_receipt(tmp_path: Path) ->
         assert result["verification_error"] == {
             "kind": "settle_verification_failed",
             "message": "read failed",
+            "error_type": "ApiError",
             "http_status": 503,
             "api_status": "UNAVAILABLE",
         }
