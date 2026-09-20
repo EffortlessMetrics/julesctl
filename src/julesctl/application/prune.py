@@ -113,6 +113,29 @@ def _selector_states(selector: dict[str, object]) -> list[str] | None:
     return list(raw) or None
 
 
+def _prefer_result(
+    previous: dict[str, object] | None,
+    current: dict[str, object],
+) -> dict[str, object]:
+    """Retain the strongest known disposition for one immutable target."""
+
+    if previous is None:
+        return current
+    rank = {"failed": 0, "already_absent": 1, "deleted": 2}
+    previous_rank = rank.get(str(previous.get("outcome")), -1)
+    current_rank = rank.get(str(current.get("outcome")), -1)
+    return current if current_rank > previous_rank else previous
+
+
+def _verification_error(exc: ApiError) -> dict[str, object]:
+    return {
+        "kind": "settle_verification_failed",
+        "message": str(exc),
+        "http_status": exc.http_status,
+        "api_status": exc.api_status,
+    }
+
+
 def apply_plan_with_settle(
     *,
     api: JulesApiClient,
@@ -143,10 +166,11 @@ def apply_plan_with_settle(
         raise InputError("deletion plan contains duplicate session IDs")
 
     pending_ids = list(target_order)
-    latest_results: dict[str, dict[str, object]] = {}
+    strongest_results: dict[str, dict[str, object]] = {}
     pass_receipts: list[dict[str, object]] = []
     appeared_ids: set[str] = set()
     stable_after_pass: int | None = None
+    verification_error: dict[str, object] | None = None
 
     for pass_number in range(1, passes + 1):
         targets = [targets_by_id[session_id] for session_id in pending_ids]
@@ -154,7 +178,11 @@ def apply_plan_with_settle(
             delete_targets(api, store, targets, max_workers=max_workers) if targets else []
         )
         for result in current_results:
-            latest_results[str(result["session_id"])] = result
+            session_id = str(result["session_id"])
+            strongest_results[session_id] = _prefer_result(
+                strongest_results.get(session_id),
+                result,
+            )
 
         receipt: dict[str, object] = {
             "pass": pass_number,
@@ -168,19 +196,29 @@ def apply_plan_with_settle(
         if settle_seconds:
             sleep(settle_seconds)
 
-        current = select_prune_targets(
-            list_sessions(),
-            states=_selector_states(selector),
-            source_name=(
-                str(selector["source_name"]) if selector.get("source_name") is not None else None
-            ),
-            older_than=(
-                str(selector["older_than"]) if selector.get("older_than") is not None else None
-            ),
-            nonterminal=bool(selector.get("nonterminal")),
-            all_sessions=bool(selector.get("all_sessions")),
-            include_unknown=bool(selector.get("include_unknown")),
-        )
+        try:
+            current = select_prune_targets(
+                list_sessions(),
+                states=_selector_states(selector),
+                source_name=(
+                    str(selector["source_name"])
+                    if selector.get("source_name") is not None
+                    else None
+                ),
+                older_than=(
+                    str(selector["older_than"])
+                    if selector.get("older_than") is not None
+                    else None
+                ),
+                nonterminal=bool(selector.get("nonterminal")),
+                all_sessions=bool(selector.get("all_sessions")),
+                include_unknown=bool(selector.get("include_unknown")),
+            )
+        except ApiError as exc:
+            verification_error = _verification_error(exc)
+            receipt["verification_error"] = verification_error
+            break
+
         current_ids = {str(item["id"]) for item in current}
         remaining_ids = [session_id for session_id in target_order if session_id in current_ids]
         newly_appeared = sorted(
@@ -199,11 +237,13 @@ def apply_plan_with_settle(
             break
 
     final_results = [
-        latest_results[session_id] for session_id in target_order if session_id in latest_results
+        strongest_results[session_id]
+        for session_id in target_order
+        if session_id in strongest_results
     ]
     failed = [item for item in final_results if item.get("outcome") == "failed"]
     unresolved_targets = [
-        session_id for session_id in target_order if session_id not in latest_results
+        session_id for session_id in target_order if session_id not in strongest_results
     ]
     if unresolved_targets:
         failed.extend(
@@ -217,10 +257,13 @@ def apply_plan_with_settle(
 
     return {
         "plan_id": plan_id,
-        "outcome": "partial" if failed else "completed",
+        "outcome": "partial" if failed or verification_error else "completed",
         "deleted": sum(item.get("outcome") == "deleted" for item in final_results),
-        "already_absent": sum(item.get("outcome") == "already_absent" for item in final_results),
+        "already_absent": sum(
+            item.get("outcome") == "already_absent" for item in final_results
+        ),
         "failed": failed,
+        "verification_error": verification_error,
         "appeared_after_snapshot": len(appeared_ids),
         "appeared_after_snapshot_ids": sorted(appeared_ids),
         "stable_after_pass": stable_after_pass,
