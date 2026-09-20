@@ -107,9 +107,7 @@ def test_verification_error_redacts_environment_and_header_credentials(
     api = SuccessfulDeleteApi()
 
     def failed_scan() -> list[dict[str, object]]:
-        raise ValueError(
-            "JULES_API_KEY=super-secret-key x-goog-api-key: super-secret-key"
-        )
+        raise ValueError("JULES_API_KEY=super-secret-key x-goog-api-key: super-secret-key")
 
     try:
         result = apply_plan_with_settle(  # type: ignore[arg-type]
