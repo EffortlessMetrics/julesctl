@@ -1,0 +1,73 @@
+name: Temporary result redaction patch
+
+on:
+  push:
+    branches: [fix/exact-prune-redacted-results]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev,security]'
+      - name: Use redacted activities in JulesClient.result
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/julesctl/client.py")
+          text = path.read_text(encoding="utf-8")
+          old_import = (
+              "from .application.artifacts import collect_artifacts, select_patch, "
+              "select_pull_request\n"
+          )
+          new_import = (
+              "from .application.artifacts import (\n"
+              "    activity_result,\n"
+              "    collect_artifacts,\n"
+              "    select_patch,\n"
+              "    select_pull_request,\n"
+              ")\n"
+          )
+          if old_import not in text:
+              raise SystemExit("artifact import marker not found")
+          text = text.replace(old_import, new_import, 1)
+
+          old_result = '''            "activities": [
+                  activity.model_dump(by_alias=True, exclude_none=True) for activity in activities
+              ],
+          '''
+          new_result = '''            "activities": [activity_result(activity) for activity in activities],
+          '''
+          if old_result not in text:
+              raise SystemExit("result activity marker not found")
+          text = text.replace(old_result, new_result, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+          ruff format .
+          ruff check .
+          mypy
+          pytest --cov=julesctl --cov-branch --cov-fail-under=65
+          bandit -r src/julesctl -c pyproject.toml
+          python -m pip_audit
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          git rm .github/workflows/temporary-fix-result-client.yml
+          git config user.name EffortlessSteven
+          git config user.email 15812269+EffortlessSteven@users.noreply.github.com
+          git add -A
+          git commit -m 'fix: preserve exact prune plans and redact result media'
+          git push origin HEAD:${{ github.ref_name }}
