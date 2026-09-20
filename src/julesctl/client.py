@@ -206,6 +206,13 @@ class JulesClient:
         source_name: str | None = None
         if repo is not None:
             source_name = str(self.resolve_source(repo)["source_name"])
+        sessions = self.list_sessions(all_history=True)
+        baseline_session_ids: list[str] = []
+        for session in sessions:
+            session_id = session.get("id")
+            if session_id is None:
+                raise InputError("session inventory contains a row without an ID")
+            baseline_session_ids.append(str(session_id))
         selector: dict[str, object] = {
             "states": states or [],
             "source_name": source_name,
@@ -214,8 +221,8 @@ class JulesClient:
             "nonterminal": nonterminal,
             "all_sessions": all_sessions,
             "include_unknown": include_unknown,
+            "baseline_session_ids": sorted(set(baseline_session_ids)),
         }
-        sessions = self.list_sessions(all_history=True)
         selected = select_prune_targets(
             sessions,
             states=states,
