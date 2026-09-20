@@ -286,8 +286,6 @@ def apply_plan_with_settle(
         if not remaining_planned_ids and not external_matches:
             stable_after_pass = pass_number
             break
-        if not pending_ids and remaining_planned_ids:
-            break
         if pass_number == passes:
             break
 
