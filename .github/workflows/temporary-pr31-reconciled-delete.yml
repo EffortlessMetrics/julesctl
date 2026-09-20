@@ -29,19 +29,13 @@ jobs:
 
           path = Path("src/julesctl/application/prune.py")
           text = path.read_text(encoding="utf-8")
-          marker = '''                strongest_results[session_id] = _prefer_result(
-                      previous,
-                      _reconciled_absence(session_id, previous),
-                  )
-                  reconciled_absent.append(session_id)
-          '''
-          replacement = '''                strongest_results[session_id] = _prefer_result(
-                      previous,
-                      _reconciled_absence(session_id, previous),
-                  )
-                  store.mark_deleted(session_id)
-                  reconciled_absent.append(session_id)
-          '''
+          marker = "                reconciled_absent.append(session_id)\n"
+          replacement = (
+              "                store.mark_deleted(session_id)\n"
+              "                reconciled_absent.append(session_id)\n"
+          )
+          if "store.mark_deleted(session_id)" in text:
+              raise SystemExit("reconciled delete state is already present")
           if text.count(marker) != 1:
               raise SystemExit(f"expected one reconciled-absence marker, found {text.count(marker)}")
           path.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
