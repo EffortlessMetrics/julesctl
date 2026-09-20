@@ -67,6 +67,10 @@ def snapshot_targets(sessions: list[dict[str, object]]) -> list[dict[str, object
     return targets
 
 
+def _redacted_optional(value: object) -> str | None:
+    return redact_text(str(value)) if value is not None else None
+
+
 def delete_targets(
     api: JulesApiClient,
     store: StateStore,
@@ -95,7 +99,7 @@ def delete_targets(
                     "session_id": session_id,
                     "outcome": "failed",
                     "http_status": error.http_status,
-                    "api_status": error.api_status,
+                    "api_status": _redacted_optional(error.api_status),
                     "error": redact_text(str(error)),
                 }
                 continue
@@ -116,13 +120,10 @@ def _selector_states(selector: dict[str, object]) -> list[str] | None:
     return list(raw) or None
 
 
-def _baseline_session_ids(
-    selector: dict[str, object],
-    fallback_target_ids: list[str],
-) -> set[str]:
+def _baseline_session_ids(selector: dict[str, object]) -> set[str] | None:
     raw = selector.get("baseline_session_ids")
     if raw is None:
-        return set(fallback_target_ids)
+        return None
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise InputError("stored deletion selector has invalid baseline_session_ids")
     return set(raw)
@@ -132,14 +133,14 @@ def _prefer_result(
     previous: dict[str, object] | None,
     current: dict[str, object],
 ) -> dict[str, object]:
-    """Retain the strongest known disposition for one immutable target."""
+    """Retain the strongest, then freshest, disposition for one immutable target."""
 
     if previous is None:
         return current
     rank = {"failed": 0, "already_absent": 1, "deleted": 2}
     previous_rank = rank.get(str(previous.get("outcome")), -1)
     current_rank = rank.get(str(current.get("outcome")), -1)
-    return current if current_rank > previous_rank else previous
+    return current if current_rank >= previous_rank else previous
 
 
 def _reconciled_absence(
@@ -173,7 +174,7 @@ def _verification_error(exc: Exception) -> dict[str, object]:
     }
     if isinstance(exc, ApiError):
         result["http_status"] = exc.http_status
-        result["api_status"] = exc.api_status
+        result["api_status"] = _redacted_optional(exc.api_status)
     return result
 
 
@@ -207,7 +208,8 @@ def apply_plan_with_settle(
     targets_by_id = {str(target["session_id"]): target for target in initial_targets}
     if len(targets_by_id) != len(initial_targets):
         raise InputError("deletion plan contains duplicate session IDs")
-    baseline_session_ids = _baseline_session_ids(selector, target_order)
+    baseline_session_ids = _baseline_session_ids(selector)
+    ingress_accounting_complete = baseline_session_ids is not None
 
     pending_ids = list(target_order)
     strongest_results: dict[str, dict[str, object]] = {}
@@ -233,6 +235,7 @@ def apply_plan_with_settle(
             "pass": pass_number,
             "target_ids": list(pending_ids),
             "results": current_results,
+            "ingress_accounting_complete": ingress_accounting_complete,
         }
         pass_receipts.append(receipt)
 
@@ -266,11 +269,16 @@ def apply_plan_with_settle(
         remaining_planned_ids = [
             session_id for session_id in target_order if session_id in fleet_ids
         ]
-        newly_appeared = sorted(
-            session_id
-            for session_id in matching_ids
-            if session_id not in baseline_session_ids and session_id not in appeared_ids
-        )
+        if baseline_session_ids is None:
+            newly_appeared: list[str] = []
+            post_snapshot_matches: set[str] = set()
+        else:
+            newly_appeared = sorted(
+                session_id
+                for session_id in matching_ids
+                if session_id not in baseline_session_ids and session_id not in appeared_ids
+            )
+            post_snapshot_matches = matching_ids.difference(baseline_session_ids)
         appeared_ids.update(newly_appeared)
 
         reconciled_absent: list[str] = []
@@ -297,9 +305,14 @@ def apply_plan_with_settle(
             for session_id in remaining_planned_ids
             if _retryable_delete_failure(strongest_results.get(session_id, {}))
         ]
-        post_snapshot_matches = matching_ids.difference(baseline_session_ids)
-        if not remaining_planned_ids and not post_snapshot_matches:
+        if (
+            ingress_accounting_complete
+            and not remaining_planned_ids
+            and not post_snapshot_matches
+        ):
             stable_after_pass = pass_number
+            break
+        if not ingress_accounting_complete and not remaining_planned_ids:
             break
         if pass_number == passes:
             break
@@ -335,6 +348,7 @@ def apply_plan_with_settle(
         "verification_error": verification_error,
         "verification_incomplete": verification_incomplete,
         "remaining_planned_target_ids": remaining_planned_ids,
+        "ingress_accounting_complete": ingress_accounting_complete,
         "appeared_after_snapshot": len(appeared_ids),
         "appeared_after_snapshot_ids": sorted(appeared_ids),
         "stable_after_pass": stable_after_pass,
