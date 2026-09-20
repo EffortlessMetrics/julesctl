@@ -223,9 +223,7 @@ def apply_plan_with_settle(
                     else None
                 ),
                 older_than=(
-                    str(selector["older_than"])
-                    if selector.get("older_than") is not None
-                    else None
+                    str(selector["older_than"]) if selector.get("older_than") is not None else None
                 ),
                 nonterminal=bool(selector.get("nonterminal")),
                 all_sessions=bool(selector.get("all_sessions")),
@@ -301,14 +299,10 @@ def apply_plan_with_settle(
     return {
         "plan_id": plan_id,
         "outcome": (
-            "partial"
-            if failed or verification_error or verification_incomplete
-            else "completed"
+            "partial" if failed or verification_error or verification_incomplete else "completed"
         ),
         "deleted": sum(item.get("outcome") == "deleted" for item in final_results),
-        "already_absent": sum(
-            item.get("outcome") == "already_absent" for item in final_results
-        ),
+        "already_absent": sum(item.get("outcome") == "already_absent" for item in final_results),
         "failed": failed,
         "verification_error": verification_error,
         "verification_incomplete": verification_incomplete,

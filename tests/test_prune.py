@@ -262,9 +262,7 @@ def test_confirmed_delete_is_not_retried_while_listing_is_stale(tmp_path: Path) 
 
 def test_failed_delete_reconciles_when_target_is_absent_from_complete_fleet(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.db")
-    api = FakeDeleteApi(
-        {"1": ApiError("lost response", http_status=503, api_status="UNAVAILABLE")}
-    )
+    api = FakeDeleteApi({"1": ApiError("lost response", http_status=503, api_status="UNAVAILABLE")})
     try:
         result = apply_plan_with_settle(  # type: ignore[arg-type]
             api=api,
@@ -287,9 +285,7 @@ def test_failed_delete_reconciles_when_target_is_absent_from_complete_fleet(tmp_
 
 def test_visible_failed_target_is_partial_when_pass_budget_expires(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.db")
-    api = FakeDeleteApi(
-        {"1": ApiError("still failing", http_status=503, api_status="UNAVAILABLE")}
-    )
+    api = FakeDeleteApi({"1": ApiError("still failing", http_status=503, api_status="UNAVAILABLE")})
     visible = {
         "id": "1",
         "raw_state": "IN_PROGRESS",
