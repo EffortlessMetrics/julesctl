@@ -271,6 +271,7 @@ def apply_plan_with_settle(
                     previous,
                     _reconciled_absence(session_id, previous),
                 )
+                store.mark_deleted(session_id)
                 reconciled_absent.append(session_id)
 
         receipt["remaining_planned_target_ids"] = remaining_planned_ids
