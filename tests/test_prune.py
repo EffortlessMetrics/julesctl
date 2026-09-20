@@ -176,8 +176,85 @@ def test_settle_pass_retries_only_the_original_planned_target(tmp_path: Path) ->
         assert api.calls == ["1", "1"]
         assert result["outcome"] == "completed"
         assert result["deleted"] == 1
+        assert result["already_absent"] == 0
         assert result["failed"] == []
         assert result["stable_after_pass"] == 2
+    finally:
+        store.close()
+
+
+class SequenceDeleteApi:
+    def __init__(self, outcomes: list[bool]) -> None:
+        self.outcomes = iter(outcomes)
+        self.calls: list[str] = []
+
+    def delete_session(self, session_id: str) -> bool:
+        self.calls.append(session_id)
+        return next(self.outcomes)
+
+
+def test_deleted_disposition_survives_later_already_absent_retry(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    api = SequenceDeleteApi([True, False])
+    snapshots = iter(
+        [
+            [
+                {
+                    "id": "1",
+                    "raw_state": "IN_PROGRESS",
+                    "lifecycle": "executing",
+                }
+            ],
+            [],
+        ]
+    )
+    try:
+        result = apply_plan_with_settle(  # type: ignore[arg-type]
+            api=api,
+            store=store,
+            plan_id="p",
+            list_sessions=lambda: next(snapshots),
+            selector={"nonterminal": True},
+            initial_targets=[{"session_id": "1"}],
+            passes=3,
+        )
+        assert api.calls == ["1", "1"]
+        assert result["deleted"] == 1
+        assert result["already_absent"] == 0
+        assert result["outcome"] == "completed"
+    finally:
+        store.close()
+
+
+def test_settle_verification_failure_preserves_delete_receipt(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    api = FakeDeleteApi({"1": True})
+
+    def failed_scan() -> list[dict[str, object]]:
+        raise ApiError("read failed", http_status=503, api_status="UNAVAILABLE")
+
+    try:
+        result = apply_plan_with_settle(  # type: ignore[arg-type]
+            api=api,
+            store=store,
+            plan_id="p",
+            list_sessions=failed_scan,
+            selector={"all_sessions": True},
+            initial_targets=[{"session_id": "1"}],
+            passes=2,
+        )
+        assert result["outcome"] == "partial"
+        assert result["deleted"] == 1
+        assert result["failed"] == []
+        assert result["verification_error"] == {
+            "kind": "settle_verification_failed",
+            "message": "read failed",
+            "http_status": 503,
+            "api_status": "UNAVAILABLE",
+        }
+        receipts = result["passes"]
+        assert isinstance(receipts, list)
+        assert receipts[0]["verification_error"] == result["verification_error"]
     finally:
         store.close()
 
