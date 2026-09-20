@@ -164,4 +164,5 @@ def test_legacy_plan_does_not_claim_post_snapshot_ingress_accounting(
     assert result["stable_after_pass"] is None
     receipts = result["passes"]
     assert isinstance(receipts, list)
+    assert len(receipts) == 1
     assert receipts[0]["ingress_accounting_complete"] is False
