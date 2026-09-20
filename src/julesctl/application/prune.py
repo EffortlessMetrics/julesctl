@@ -199,9 +199,7 @@ def apply_plan_with_settle(
             break
 
     final_results = [
-        latest_results[session_id]
-        for session_id in target_order
-        if session_id in latest_results
+        latest_results[session_id] for session_id in target_order if session_id in latest_results
     ]
     failed = [item for item in final_results if item.get("outcome") == "failed"]
     unresolved_targets = [
@@ -221,9 +219,7 @@ def apply_plan_with_settle(
         "plan_id": plan_id,
         "outcome": "partial" if failed else "completed",
         "deleted": sum(item.get("outcome") == "deleted" for item in final_results),
-        "already_absent": sum(
-            item.get("outcome") == "already_absent" for item in final_results
-        ),
+        "already_absent": sum(item.get("outcome") == "already_absent" for item in final_results),
         "failed": failed,
         "appeared_after_snapshot": len(appeared_ids),
         "appeared_after_snapshot_ids": sorted(appeared_ids),

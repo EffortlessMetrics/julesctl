@@ -3,7 +3,12 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 
-from .application.artifacts import collect_artifacts, select_patch, select_pull_request
+from .application.artifacts import (
+    activity_result,
+    collect_artifacts,
+    select_patch,
+    select_pull_request,
+)
 from .application.prune import apply_plan_with_settle, select_prune_targets, snapshot_targets
 from .application.sessions import filter_sessions
 from .application.steering import approve_once, message_once
@@ -150,9 +155,7 @@ class JulesClient:
         return {
             "session": self._controller.normalize_session(session, origin=origin),
             **collect_artifacts(session, activities),
-            "activities": [
-                activity.model_dump(by_alias=True, exclude_none=True) for activity in activities
-            ],
+            "activities": [activity_result(activity) for activity in activities],
         }
 
     def patch(self, session_id: str, *, index: int = -1) -> dict[str, object]:
