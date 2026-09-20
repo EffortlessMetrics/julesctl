@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from ..api.client import JulesApiClient
 from ..application.sessions import filter_sessions
 from ..domain.errors import ApiError, InputError
+from ..redaction import redact_text
 from ..store import StateStore
 
 _DELETE_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -95,7 +96,7 @@ def delete_targets(
                     "outcome": "failed",
                     "http_status": error.http_status,
                     "api_status": error.api_status,
-                    "error": str(error),
+                    "error": redact_text(str(error)),
                 }
                 continue
             store.mark_deleted(session_id)
@@ -113,6 +114,18 @@ def _selector_states(selector: dict[str, object]) -> list[str] | None:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise InputError("stored deletion selector has invalid states")
     return list(raw) or None
+
+
+def _baseline_session_ids(
+    selector: dict[str, object],
+    fallback_target_ids: list[str],
+) -> set[str]:
+    raw = selector.get("baseline_session_ids")
+    if raw is None:
+        return set(fallback_target_ids)
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise InputError("stored deletion selector has invalid baseline_session_ids")
+    return set(raw)
 
 
 def _prefer_result(
@@ -155,7 +168,7 @@ def _retryable_delete_failure(result: dict[str, object]) -> bool:
 def _verification_error(exc: Exception) -> dict[str, object]:
     result: dict[str, object] = {
         "kind": "settle_verification_failed",
-        "message": str(exc),
+        "message": redact_text(str(exc)),
         "error_type": exc.__class__.__name__,
     }
     if isinstance(exc, ApiError):
@@ -194,6 +207,7 @@ def apply_plan_with_settle(
     targets_by_id = {str(target["session_id"]): target for target in initial_targets}
     if len(targets_by_id) != len(initial_targets):
         raise InputError("deletion plan contains duplicate session IDs")
+    baseline_session_ids = _baseline_session_ids(selector, target_order)
 
     pending_ids = list(target_order)
     strongest_results: dict[str, dict[str, object]] = {}
@@ -255,7 +269,7 @@ def apply_plan_with_settle(
         newly_appeared = sorted(
             session_id
             for session_id in matching_ids
-            if session_id not in targets_by_id and session_id not in appeared_ids
+            if session_id not in baseline_session_ids and session_id not in appeared_ids
         )
         appeared_ids.update(newly_appeared)
 
@@ -283,8 +297,8 @@ def apply_plan_with_settle(
             for session_id in remaining_planned_ids
             if _retryable_delete_failure(strongest_results.get(session_id, {}))
         ]
-        external_matches = matching_ids.difference(targets_by_id)
-        if not remaining_planned_ids and not external_matches:
+        post_snapshot_matches = matching_ids.difference(baseline_session_ids)
+        if not remaining_planned_ids and not post_snapshot_matches:
             stable_after_pass = pass_number
             break
         if pass_number == passes:
