@@ -126,37 +126,48 @@ def apply_plan_with_settle(
     passes: int = 1,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, object]:
+    """Apply one immutable plan, retrying only its stored targets across settle passes.
+
+    Later fleet scans are evidence only. Sessions that match the original selector but
+    were absent from the reviewed snapshot are reported and never added to this plan.
+    """
+
     if passes < 1 or passes > 20:
         raise InputError("passes must be between 1 and 20")
     if settle_seconds < 0:
         raise InputError("settle_seconds must not be negative")
 
-    results: list[dict[str, object]] = []
+    target_order = [str(target["session_id"]) for target in initial_targets]
+    targets_by_id = {str(target["session_id"]): target for target in initial_targets}
+    if len(targets_by_id) != len(initial_targets):
+        raise InputError("deletion plan contains duplicate session IDs")
+
+    pending_ids = list(target_order)
+    latest_results: dict[str, dict[str, object]] = {}
     pass_receipts: list[dict[str, object]] = []
-    seen_ids = {str(target["session_id"]) for target in initial_targets}
-    targets = initial_targets
-    appeared_after_snapshot = 0
+    appeared_ids: set[str] = set()
     stable_after_pass: int | None = None
 
     for pass_number in range(1, passes + 1):
-        current_results = delete_targets(
-            api,
-            store,
-            targets,
-            max_workers=max_workers,
+        targets = [targets_by_id[session_id] for session_id in pending_ids]
+        current_results = (
+            delete_targets(api, store, targets, max_workers=max_workers) if targets else []
         )
-        results.extend(current_results)
-        pass_receipts.append(
-            {
-                "pass": pass_number,
-                "target_ids": [str(target["session_id"]) for target in targets],
-                "results": current_results,
-            }
-        )
+        for result in current_results:
+            latest_results[str(result["session_id"])] = result
+
+        receipt: dict[str, object] = {
+            "pass": pass_number,
+            "target_ids": list(pending_ids),
+            "results": current_results,
+        }
+        pass_receipts.append(receipt)
+
         if pass_number == passes:
             break
         if settle_seconds:
             sleep(settle_seconds)
+
         current = select_prune_targets(
             list_sessions(),
             states=_selector_states(selector),
@@ -170,22 +181,52 @@ def apply_plan_with_settle(
             all_sessions=bool(selector.get("all_sessions")),
             include_unknown=bool(selector.get("include_unknown")),
         )
-        new_sessions = [item for item in current if str(item["id"]) not in seen_ids]
-        if not new_sessions:
+        current_ids = {str(item["id"]) for item in current}
+        remaining_ids = [session_id for session_id in target_order if session_id in current_ids]
+        newly_appeared = sorted(
+            session_id
+            for session_id in current_ids
+            if session_id not in targets_by_id and session_id not in appeared_ids
+        )
+        appeared_ids.update(newly_appeared)
+        receipt["remaining_planned_target_ids"] = remaining_ids
+        receipt["appeared_after_snapshot_ids"] = newly_appeared
+
+        pending_ids = remaining_ids
+        external_matches = current_ids.difference(targets_by_id)
+        if not pending_ids and not external_matches:
             stable_after_pass = pass_number
             break
-        targets = snapshot_targets(new_sessions)
-        appeared_after_snapshot += len(targets)
-        seen_ids.update(str(target["session_id"]) for target in targets)
 
-    failed = [item for item in results if item.get("outcome") == "failed"]
+    final_results = [
+        latest_results[session_id]
+        for session_id in target_order
+        if session_id in latest_results
+    ]
+    failed = [item for item in final_results if item.get("outcome") == "failed"]
+    unresolved_targets = [
+        session_id for session_id in target_order if session_id not in latest_results
+    ]
+    if unresolved_targets:
+        failed.extend(
+            {
+                "session_id": session_id,
+                "outcome": "failed",
+                "error": "planned target was not attempted",
+            }
+            for session_id in unresolved_targets
+        )
+
     return {
         "plan_id": plan_id,
         "outcome": "partial" if failed else "completed",
-        "deleted": sum(item.get("outcome") == "deleted" for item in results),
-        "already_absent": sum(item.get("outcome") == "already_absent" for item in results),
+        "deleted": sum(item.get("outcome") == "deleted" for item in final_results),
+        "already_absent": sum(
+            item.get("outcome") == "already_absent" for item in final_results
+        ),
         "failed": failed,
-        "appeared_after_snapshot": appeared_after_snapshot,
+        "appeared_after_snapshot": len(appeared_ids),
+        "appeared_after_snapshot_ids": sorted(appeared_ids),
         "stable_after_pass": stable_after_pass,
         "passes": pass_receipts,
     }
