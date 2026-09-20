@@ -101,14 +101,59 @@ def test_delete_targets_preserves_deleted_absent_and_failed(tmp_path: Path) -> N
         store.close()
 
 
-def test_settle_pass_deletes_sessions_appearing_after_snapshot(tmp_path: Path) -> None:
+def test_settle_pass_reports_new_sessions_without_deleting_them(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.db")
-    api = FakeDeleteApi({"1": True, "2": True})
+    api = FakeDeleteApi({"1": True})
+    new_session = {
+        "id": "2",
+        "raw_state": "IN_PROGRESS",
+        "lifecycle": "executing",
+        "source_name": "sources/one",
+    }
+    try:
+        result = apply_plan_with_settle(  # type: ignore[arg-type]
+            api=api,
+            store=store,
+            plan_id="p",
+            list_sessions=lambda: [new_session],
+            selector={"nonterminal": True, "include_unknown": False},
+            initial_targets=[{"session_id": "1"}],
+            settle_seconds=0,
+            passes=3,
+        )
+        assert api.calls == ["1"]
+        assert result["appeared_after_snapshot"] == 1
+        assert result["appeared_after_snapshot_ids"] == ["2"]
+        assert result["stable_after_pass"] is None
+        assert result["deleted"] == 1
+        receipts = result["passes"]
+        assert isinstance(receipts, list)
+        assert receipts[0]["appeared_after_snapshot_ids"] == ["2"]
+        assert receipts[1]["target_ids"] == []
+        assert receipts[2]["target_ids"] == []
+    finally:
+        store.close()
+
+
+class FlakyDeleteApi:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def delete_session(self, session_id: str) -> bool:
+        self.calls.append(session_id)
+        if len(self.calls) == 1:
+            raise ApiError("temporary", http_status=503, api_status="UNAVAILABLE")
+        return True
+
+
+def test_settle_pass_retries_only_the_original_planned_target(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    api = FlakyDeleteApi()
     snapshots = iter(
         [
             [
                 {
-                    "id": "2",
+                    "id": "1",
                     "raw_state": "IN_PROGRESS",
                     "lifecycle": "executing",
                     "source_name": "sources/one",
@@ -128,10 +173,28 @@ def test_settle_pass_deletes_sessions_appearing_after_snapshot(tmp_path: Path) -
             settle_seconds=0,
             passes=3,
         )
-        assert api.calls == ["1", "2"]
-        assert result["appeared_after_snapshot"] == 1
+        assert api.calls == ["1", "1"]
+        assert result["outcome"] == "completed"
+        assert result["deleted"] == 1
+        assert result["failed"] == []
         assert result["stable_after_pass"] == 2
-        assert result["deleted"] == 2
+    finally:
+        store.close()
+
+
+def test_duplicate_plan_targets_are_rejected(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    api = FakeDeleteApi({"1": True})
+    try:
+        with pytest.raises(InputError, match="duplicate"):
+            apply_plan_with_settle(  # type: ignore[arg-type]
+                api=api,
+                store=store,
+                plan_id="p",
+                list_sessions=lambda: [],
+                selector={"all_sessions": True},
+                initial_targets=[{"session_id": "1"}, {"session_id": "1"}],
+            )
     finally:
         store.close()
 
