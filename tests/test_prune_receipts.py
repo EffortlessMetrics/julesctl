@@ -22,6 +22,23 @@ class LostDeleteResponseApi:
 
 def test_absent_target_reconciles_without_leaving_incomplete_plan(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.db")
+    store.upsert_session(
+        {
+            "session_id": "1",
+            "session_name": "sessions/1",
+            "origin": "managed",
+            "raw_state": "IN_PROGRESS",
+            "lifecycle": "executing",
+            "archived": False,
+            "repo": None,
+            "source_name": None,
+            "starting_branch": None,
+            "working_branch": None,
+            "title": "lost response",
+            "prompt_sha256": None,
+            "pr_url": None,
+        }
+    )
     api = LostDeleteResponseApi()
     try:
         result = apply_plan_with_settle(  # type: ignore[arg-type]
@@ -33,6 +50,7 @@ def test_absent_target_reconciles_without_leaving_incomplete_plan(tmp_path: Path
             initial_targets=[{"session_id": "1"}],
             passes=1,
         )
+        assert store.active_rows() == []
     finally:
         store.close()
 
