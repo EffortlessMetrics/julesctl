@@ -1,0 +1,69 @@
+name: Temporary activities redaction
+
+on:
+  push:
+    branches: [fix/exact-prune-redacted-results]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev,security]'
+      - name: Redact activity media in CLI machine output
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/julesctl/cli/agent.py")
+          text = path.read_text(encoding="utf-8")
+          import_marker = "from ..application.specs import derive_title, read_prompt\n"
+          import_line = "from ..application.artifacts import activity_result\n"
+          if import_line not in text:
+              if import_marker not in text:
+                  raise SystemExit("agent specs import marker not found")
+              text = text.replace(import_marker, import_line + import_marker, 1)
+
+          method_marker = "def activities_command(\n"
+          prefix, marker, suffix = text.partition(method_marker)
+          if not marker:
+              raise SystemExit("activities_command marker not found")
+          next_method = "\n\ndef watch_command(\n"
+          activity_body, separator, remainder = suffix.partition(next_method)
+          if not separator:
+              raise SystemExit("watch_command boundary not found")
+          old = "activity.model_dump(by_alias=True, exclude_none=True)"
+          if activity_body.count(old) != 1:
+              raise SystemExit(
+                  f"expected one raw activity dump, found {activity_body.count(old)}"
+              )
+          activity_body = activity_body.replace(old, "activity_result(activity)", 1)
+          path.write_text(prefix + marker + activity_body + separator + remainder, encoding="utf-8")
+          PY
+          ruff format .
+          ruff check .
+          mypy
+          pytest --cov=julesctl --cov-branch --cov-fail-under=65
+          bandit -r src/julesctl -c pyproject.toml
+          python -m pip_audit
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          git rm .github/workflows/temporary-activities-redaction.yml
+          git config user.name EffortlessSteven
+          git config user.email 15812269+EffortlessSteven@users.noreply.github.com
+          git add -A
+          git commit -m 'fix: redact media from activities output'
+          git push origin HEAD:${{ github.ref_name }}
