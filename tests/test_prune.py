@@ -116,7 +116,7 @@ def test_settle_pass_reports_new_sessions_without_deleting_them(tmp_path: Path) 
             store=store,
             plan_id="p",
             list_sessions=lambda: [new_session],
-            selector={"nonterminal": True, "include_unknown": False},
+            selector={"nonterminal": True, "include_unknown": False, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             settle_seconds=0,
             passes=3,
@@ -169,7 +169,7 @@ def test_settle_pass_retries_only_the_original_planned_target(tmp_path: Path) ->
             store=store,
             plan_id="p",
             list_sessions=lambda: next(snapshots),
-            selector={"nonterminal": True, "include_unknown": False},
+            selector={"nonterminal": True, "include_unknown": False, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             settle_seconds=0,
             passes=3,
@@ -205,7 +205,7 @@ def test_failed_target_is_retried_after_it_stops_matching_selector(tmp_path: Pat
             store=store,
             plan_id="p",
             list_sessions=lambda: next(snapshots),
-            selector={"nonterminal": True},
+            selector={"nonterminal": True, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             passes=3,
         )
@@ -247,7 +247,7 @@ def test_confirmed_delete_is_not_retried_while_listing_is_stale(tmp_path: Path) 
             store=store,
             plan_id="p",
             list_sessions=lambda: next(snapshots),
-            selector={"nonterminal": True},
+            selector={"nonterminal": True, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             passes=3,
         )
@@ -269,7 +269,7 @@ def test_failed_delete_reconciles_when_target_is_absent_from_complete_fleet(tmp_
             store=store,
             plan_id="p",
             list_sessions=lambda: [],
-            selector={"all_sessions": True},
+            selector={"all_sessions": True, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             passes=1,
         )
@@ -297,7 +297,7 @@ def test_visible_failed_target_is_partial_when_pass_budget_expires(tmp_path: Pat
             store=store,
             plan_id="p",
             list_sessions=lambda: [visible],
-            selector={"nonterminal": True},
+            selector={"nonterminal": True, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             passes=1,
         )
@@ -322,7 +322,7 @@ def test_settle_verification_failure_preserves_delete_receipt(tmp_path: Path) ->
             store=store,
             plan_id="p",
             list_sessions=failed_scan,
-            selector={"all_sessions": True},
+            selector={"all_sessions": True, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             passes=2,
         )
@@ -353,7 +353,7 @@ def test_duplicate_plan_targets_are_rejected(tmp_path: Path) -> None:
                 store=store,
                 plan_id="p",
                 list_sessions=lambda: [],
-                selector={"all_sessions": True},
+                selector={"all_sessions": True, "baseline_session_ids": ["1"]},
                 initial_targets=[{"session_id": "1"}, {"session_id": "1"}],
             )
     finally:

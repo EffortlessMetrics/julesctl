@@ -46,7 +46,7 @@ def test_absent_target_reconciles_without_leaving_incomplete_plan(tmp_path: Path
             store=store,
             plan_id="plan",
             list_sessions=lambda: [],
-            selector={"all_sessions": True},
+            selector={"all_sessions": True, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             passes=1,
         )

@@ -305,11 +305,7 @@ def apply_plan_with_settle(
             for session_id in remaining_planned_ids
             if _retryable_delete_failure(strongest_results.get(session_id, {}))
         ]
-        if (
-            ingress_accounting_complete
-            and not remaining_planned_ids
-            and not post_snapshot_matches
-        ):
+        if ingress_accounting_complete and not remaining_planned_ids and not post_snapshot_matches:
             stable_after_pass = pass_number
             break
         if not ingress_accounting_complete and not remaining_planned_ids:

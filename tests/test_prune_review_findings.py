@@ -49,7 +49,7 @@ def test_definitive_delete_failure_is_not_retried_across_settle_passes(
             store=store,
             plan_id="plan",
             list_sessions=lambda: [visible],
-            selector={"nonterminal": True},
+            selector={"nonterminal": True, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             passes=5,
         )
@@ -80,7 +80,7 @@ def test_non_api_verification_failure_preserves_successful_delete_receipt(
             store=store,
             plan_id="plan",
             list_sessions=malformed_fleet,
-            selector={"all_sessions": True},
+            selector={"all_sessions": True, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
             passes=2,
         )
@@ -115,7 +115,7 @@ def test_verification_error_redacts_environment_and_header_credentials(
             store=store,
             plan_id="plan",
             list_sessions=failed_scan,
-            selector={"all_sessions": True},
+            selector={"all_sessions": True, "baseline_session_ids": ["1"]},
             initial_targets=[{"session_id": "1"}],
         )
     finally:
