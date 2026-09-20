@@ -1,0 +1,68 @@
+name: Temporary controller result redaction
+
+on:
+  push:
+    branches: [fix/exact-prune-redacted-results]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev,security]'
+      - name: Redact lower-level session result activities
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/julesctl/controller.py")
+          text = path.read_text(encoding="utf-8")
+          import_marker = "from .api.client import JulesApiClient\n"
+          import_line = "from .application.artifacts import activity_result\n"
+          if import_line not in text:
+              if import_marker not in text:
+                  raise SystemExit("controller API import marker not found")
+              text = text.replace(import_marker, import_marker + import_line, 1)
+
+          old_expression = (
+              "activity.model_dump(by_alias=True, exclude_none=True) "
+              "for activity in self.ctx.api.iter_activities(session.id)"
+          )
+          new_expression = (
+              "activity_result(activity) "
+              "for activity in self.ctx.api.iter_activities(session.id)"
+          )
+          if text.count(old_expression) != 1:
+              raise SystemExit(
+                  f"expected one controller result expression, found {text.count(old_expression)}"
+              )
+          text = text.replace(old_expression, new_expression, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+          ruff format .
+          ruff check .
+          mypy
+          pytest --cov=julesctl --cov-branch --cov-fail-under=65
+          bandit -r src/julesctl -c pyproject.toml
+          python -m pip_audit
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          git rm .github/workflows/temporary-controller-result-redaction.yml
+          git config user.name EffortlessSteven
+          git config user.email 15812269+EffortlessSteven@users.noreply.github.com
+          git add -A
+          git commit -m 'fix: redact media from every result surface'
+          git push origin HEAD:${{ github.ref_name }}
