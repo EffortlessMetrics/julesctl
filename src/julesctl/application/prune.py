@@ -127,6 +127,22 @@ def _prefer_result(
     return current if current_rank > previous_rank else previous
 
 
+def _reconciled_absence(
+    session_id: str,
+    previous: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "session_id": session_id,
+        "outcome": "already_absent",
+        "reconciled_after_failure": True,
+        "prior_error": {
+            key: previous.get(key)
+            for key in ("http_status", "api_status", "error")
+            if previous.get(key) is not None
+        },
+    }
+
+
 def _verification_error(exc: ApiError) -> dict[str, object]:
     return {
         "kind": "settle_verification_failed",
@@ -149,10 +165,11 @@ def apply_plan_with_settle(
     passes: int = 1,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, object]:
-    """Apply one immutable plan, retrying only its stored targets across settle passes.
+    """Apply one immutable plan and separate retries from stability evidence.
 
-    Later fleet scans are evidence only. Sessions that match the original selector but
-    were absent from the reviewed snapshot are reported and never added to this plan.
+    Every DELETE is limited to the stored target set. A target is retried only when its
+    previous DELETE failed and complete fleet enumeration still shows that exact ID.
+    Sessions absent from the reviewed snapshot are evidence only and are never deleted.
     """
 
     if passes < 1 or passes > 20:
@@ -169,6 +186,7 @@ def apply_plan_with_settle(
     strongest_results: dict[str, dict[str, object]] = {}
     pass_receipts: list[dict[str, object]] = []
     appeared_ids: set[str] = set()
+    remaining_planned_ids: list[str] = list(target_order)
     stable_after_pass: int | None = None
     verification_error: dict[str, object] | None = None
 
@@ -191,14 +209,13 @@ def apply_plan_with_settle(
         }
         pass_receipts.append(receipt)
 
-        if pass_number == passes:
-            break
         if settle_seconds:
             sleep(settle_seconds)
 
         try:
-            current = select_prune_targets(
-                list_sessions(),
+            fleet = list_sessions()
+            matching = select_prune_targets(
+                fleet,
                 states=_selector_states(selector),
                 source_name=(
                     str(selector["source_name"])
@@ -206,7 +223,9 @@ def apply_plan_with_settle(
                     else None
                 ),
                 older_than=(
-                    str(selector["older_than"]) if selector.get("older_than") is not None else None
+                    str(selector["older_than"])
+                    if selector.get("older_than") is not None
+                    else None
                 ),
                 nonterminal=bool(selector.get("nonterminal")),
                 all_sessions=bool(selector.get("all_sessions")),
@@ -217,21 +236,46 @@ def apply_plan_with_settle(
             receipt["verification_error"] = verification_error
             break
 
-        current_ids = {str(item["id"]) for item in current}
-        remaining_ids = [session_id for session_id in target_order if session_id in current_ids]
+        fleet_ids = {str(item["id"]) for item in fleet}
+        matching_ids = {str(item["id"]) for item in matching}
+        remaining_planned_ids = [
+            session_id for session_id in target_order if session_id in fleet_ids
+        ]
         newly_appeared = sorted(
             session_id
-            for session_id in current_ids
+            for session_id in matching_ids
             if session_id not in targets_by_id and session_id not in appeared_ids
         )
         appeared_ids.update(newly_appeared)
-        receipt["remaining_planned_target_ids"] = remaining_ids
-        receipt["appeared_after_snapshot_ids"] = newly_appeared
 
-        pending_ids = remaining_ids
-        external_matches = current_ids.difference(targets_by_id)
-        if not pending_ids and not external_matches:
+        reconciled_absent: list[str] = []
+        for session_id in target_order:
+            previous = strongest_results.get(session_id)
+            if (
+                previous is not None
+                and previous.get("outcome") == "failed"
+                and session_id not in fleet_ids
+            ):
+                strongest_results[session_id] = _prefer_result(
+                    previous,
+                    _reconciled_absence(session_id, previous),
+                )
+                reconciled_absent.append(session_id)
+
+        receipt["remaining_planned_target_ids"] = remaining_planned_ids
+        receipt["appeared_after_snapshot_ids"] = newly_appeared
+        receipt["reconciled_absent_target_ids"] = reconciled_absent
+
+        pending_ids = [
+            session_id
+            for session_id in remaining_planned_ids
+            if strongest_results.get(session_id, {}).get("outcome") == "failed"
+        ]
+        external_matches = matching_ids.difference(targets_by_id)
+        if not remaining_planned_ids and not external_matches:
             stable_after_pass = pass_number
+            break
+        if pass_number == passes:
             break
 
     final_results = [
@@ -253,13 +297,22 @@ def apply_plan_with_settle(
             for session_id in unresolved_targets
         )
 
+    verification_incomplete = bool(remaining_planned_ids) and verification_error is None
     return {
         "plan_id": plan_id,
-        "outcome": "partial" if failed or verification_error else "completed",
+        "outcome": (
+            "partial"
+            if failed or verification_error or verification_incomplete
+            else "completed"
+        ),
         "deleted": sum(item.get("outcome") == "deleted" for item in final_results),
-        "already_absent": sum(item.get("outcome") == "already_absent" for item in final_results),
+        "already_absent": sum(
+            item.get("outcome") == "already_absent" for item in final_results
+        ),
         "failed": failed,
         "verification_error": verification_error,
+        "verification_incomplete": verification_incomplete,
+        "remaining_planned_target_ids": remaining_planned_ids,
         "appeared_after_snapshot": len(appeared_ids),
         "appeared_after_snapshot_ids": sorted(appeared_ids),
         "stable_after_pass": stable_after_pass,
