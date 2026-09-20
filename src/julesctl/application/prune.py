@@ -10,6 +10,8 @@ from ..application.sessions import filter_sessions
 from ..domain.errors import ApiError, InputError
 from ..store import StateStore
 
+_DELETE_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
 
 def select_prune_targets(
     sessions: list[dict[str, object]],
@@ -143,13 +145,23 @@ def _reconciled_absence(
     }
 
 
-def _verification_error(exc: ApiError) -> dict[str, object]:
-    return {
+def _retryable_delete_failure(result: dict[str, object]) -> bool:
+    if result.get("outcome") != "failed":
+        return False
+    status = result.get("http_status")
+    return status is None or status in _DELETE_RETRYABLE_STATUS_CODES
+
+
+def _verification_error(exc: Exception) -> dict[str, object]:
+    result: dict[str, object] = {
         "kind": "settle_verification_failed",
         "message": str(exc),
-        "http_status": exc.http_status,
-        "api_status": exc.api_status,
+        "error_type": exc.__class__.__name__,
     }
+    if isinstance(exc, ApiError):
+        result["http_status"] = exc.http_status
+        result["api_status"] = exc.api_status
+    return result
 
 
 def apply_plan_with_settle(
@@ -168,8 +180,9 @@ def apply_plan_with_settle(
     """Apply one immutable plan and separate retries from stability evidence.
 
     Every DELETE is limited to the stored target set. A target is retried only when its
-    previous DELETE failed and complete fleet enumeration still shows that exact ID.
-    Sessions absent from the reviewed snapshot are evidence only and are never deleted.
+    previous DELETE failed transiently and complete fleet enumeration still shows that
+    exact ID. Sessions absent from the reviewed snapshot are evidence only and are never
+    deleted.
     """
 
     if passes < 1 or passes > 20:
@@ -229,7 +242,7 @@ def apply_plan_with_settle(
                 all_sessions=bool(selector.get("all_sessions")),
                 include_unknown=bool(selector.get("include_unknown")),
             )
-        except ApiError as exc:
+        except Exception as exc:  # Preserve destructive receipts for all normalization failures.
             verification_error = _verification_error(exc)
             receipt["verification_error"] = verification_error
             break
@@ -267,11 +280,13 @@ def apply_plan_with_settle(
         pending_ids = [
             session_id
             for session_id in remaining_planned_ids
-            if strongest_results.get(session_id, {}).get("outcome") == "failed"
+            if _retryable_delete_failure(strongest_results.get(session_id, {}))
         ]
         external_matches = matching_ids.difference(targets_by_id)
         if not remaining_planned_ids and not external_matches:
             stable_after_pass = pass_number
+            break
+        if not pending_ids and remaining_planned_ids:
             break
         if pass_number == passes:
             break
