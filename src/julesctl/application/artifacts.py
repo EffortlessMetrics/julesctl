@@ -51,6 +51,20 @@ def _media_summary(value: dict[str, Any], *, activity_name: str) -> dict[str, ob
     }
 
 
+def _redacted_media(value: dict[str, Any]) -> dict[str, object]:
+    """Preserve all server metadata while isolating controller-owned redaction evidence."""
+
+    metadata = {key: item for key, item in value.items() if key != "data"}
+    redaction: dict[str, object] = {"inline_data_omitted": True}
+    decoded_bytes = _decoded_media_bytes(value)
+    if decoded_bytes is not None:
+        redaction["decoded_bytes"] = decoded_bytes
+    return {
+        "metadata": metadata,
+        "redaction": redaction,
+    }
+
+
 def activity_result(activity: ActivityWire) -> dict[str, object]:
     """Return one activity without embedding documented inline media bodies."""
 
@@ -65,12 +79,7 @@ def activity_result(activity: ActivityWire) -> dict[str, object]:
         media = artifact.get("media")
         if not isinstance(media, dict) or "data" not in media:
             continue
-        sanitized = {key: value for key, value in media.items() if key != "data"}
-        sanitized["inlineDataOmitted"] = True
-        decoded_bytes = _decoded_media_bytes(media)
-        if decoded_bytes is not None:
-            sanitized["decodedBytes"] = decoded_bytes
-        artifact["media"] = sanitized
+        artifact["media"] = _redacted_media(media)
     return result
 
 
