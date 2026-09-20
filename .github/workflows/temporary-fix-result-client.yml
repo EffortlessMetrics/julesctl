@@ -45,15 +45,16 @@ jobs:
               raise SystemExit("artifact import marker not found")
           text = text.replace(old_import, new_import, 1)
 
-          old_result = '''            "activities": [
-                  activity.model_dump(by_alias=True, exclude_none=True) for activity in activities
-              ],
-          '''
-          new_result = '''            "activities": [activity_result(activity) for activity in activities],
-          '''
-          if old_result not in text:
-              raise SystemExit("result activity marker not found")
-          text = text.replace(old_result, new_result, 1)
+          old_expression = (
+              "activity.model_dump(by_alias=True, exclude_none=True) "
+              "for activity in activities"
+          )
+          new_expression = "activity_result(activity) for activity in activities"
+          if text.count(old_expression) != 1:
+              raise SystemExit(
+                  f"expected one result activity expression, found {text.count(old_expression)}"
+              )
+          text = text.replace(old_expression, new_expression, 1)
           path.write_text(text, encoding="utf-8")
           PY
           ruff format .
