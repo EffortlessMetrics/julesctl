@@ -36,22 +36,17 @@ jobs:
                   raise SystemExit("controller API import marker not found")
               text = text.replace(import_marker, import_marker + import_line, 1)
 
-          old_block = '''        activities = [
-              activity.model_dump(by_alias=True, exclude_none=True)
-              for activity in self.ctx.api.iter_activities(session.id)
-          ]
-          '''
-          new_block = '''        activities = [
-              activity_result(activity)
-              for activity in self.ctx.api.iter_activities(session.id)
-          ]
-          '''
-          if text.count(old_block) != 1:
+          method_marker = "    def session_result(self, session_id: str) -> dict[str, object]:\n"
+          prefix, marker, suffix = text.partition(method_marker)
+          if not marker:
+              raise SystemExit("session_result method marker not found")
+          old = "activity.model_dump(by_alias=True, exclude_none=True)"
+          if suffix.count(old) != 1:
               raise SystemExit(
-                  f"expected one controller result block, found {text.count(old_block)}"
+                  f"expected one raw activity dump in session_result suffix, found {suffix.count(old)}"
               )
-          text = text.replace(old_block, new_block, 1)
-          path.write_text(text, encoding="utf-8")
+          suffix = suffix.replace(old, "activity_result(activity)", 1)
+          path.write_text(prefix + marker + suffix, encoding="utf-8")
           PY
           ruff format .
           ruff check .
