@@ -126,6 +126,7 @@ def test_settle_pass_reports_new_sessions_without_deleting_them(tmp_path: Path) 
         assert result["appeared_after_snapshot_ids"] == ["2"]
         assert result["stable_after_pass"] is None
         assert result["deleted"] == 1
+        assert result["remaining_planned_target_ids"] == []
         receipts = result["passes"]
         assert isinstance(receipts, list)
         assert receipts[0]["appeared_after_snapshot_ids"] == ["2"]
@@ -183,6 +184,38 @@ def test_settle_pass_retries_only_the_original_planned_target(tmp_path: Path) ->
         store.close()
 
 
+def test_failed_target_is_retried_after_it_stops_matching_selector(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    api = FlakyDeleteApi()
+    snapshots = iter(
+        [
+            [
+                {
+                    "id": "1",
+                    "raw_state": "COMPLETED",
+                    "lifecycle": "terminal",
+                }
+            ],
+            [],
+        ]
+    )
+    try:
+        result = apply_plan_with_settle(  # type: ignore[arg-type]
+            api=api,
+            store=store,
+            plan_id="p",
+            list_sessions=lambda: next(snapshots),
+            selector={"nonterminal": True},
+            initial_targets=[{"session_id": "1"}],
+            passes=3,
+        )
+        assert api.calls == ["1", "1"]
+        assert result["outcome"] == "completed"
+        assert result["deleted"] == 1
+    finally:
+        store.close()
+
+
 class SequenceDeleteApi:
     def __init__(self, outcomes: list[bool]) -> None:
         self.outcomes = iter(outcomes)
@@ -193,9 +226,9 @@ class SequenceDeleteApi:
         return next(self.outcomes)
 
 
-def test_deleted_disposition_survives_later_already_absent_retry(tmp_path: Path) -> None:
+def test_confirmed_delete_is_not_retried_while_listing_is_stale(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "state.db")
-    api = SequenceDeleteApi([True, False])
+    api = SequenceDeleteApi([True])
     snapshots = iter(
         [
             [
@@ -218,10 +251,64 @@ def test_deleted_disposition_survives_later_already_absent_retry(tmp_path: Path)
             initial_targets=[{"session_id": "1"}],
             passes=3,
         )
-        assert api.calls == ["1", "1"]
+        assert api.calls == ["1"]
         assert result["deleted"] == 1
         assert result["already_absent"] == 0
         assert result["outcome"] == "completed"
+        assert result["stable_after_pass"] == 2
+    finally:
+        store.close()
+
+
+def test_failed_delete_reconciles_when_target_is_absent_from_complete_fleet(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    api = FakeDeleteApi(
+        {"1": ApiError("lost response", http_status=503, api_status="UNAVAILABLE")}
+    )
+    try:
+        result = apply_plan_with_settle(  # type: ignore[arg-type]
+            api=api,
+            store=store,
+            plan_id="p",
+            list_sessions=lambda: [],
+            selector={"all_sessions": True},
+            initial_targets=[{"session_id": "1"}],
+            passes=1,
+        )
+        assert result["outcome"] == "completed"
+        assert result["already_absent"] == 1
+        assert result["failed"] == []
+        receipts = result["passes"]
+        assert isinstance(receipts, list)
+        assert receipts[0]["reconciled_absent_target_ids"] == ["1"]
+    finally:
+        store.close()
+
+
+def test_visible_failed_target_is_partial_when_pass_budget_expires(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    api = FakeDeleteApi(
+        {"1": ApiError("still failing", http_status=503, api_status="UNAVAILABLE")}
+    )
+    visible = {
+        "id": "1",
+        "raw_state": "IN_PROGRESS",
+        "lifecycle": "executing",
+    }
+    try:
+        result = apply_plan_with_settle(  # type: ignore[arg-type]
+            api=api,
+            store=store,
+            plan_id="p",
+            list_sessions=lambda: [visible],
+            selector={"nonterminal": True},
+            initial_targets=[{"session_id": "1"}],
+            passes=1,
+        )
+        assert result["outcome"] == "partial"
+        assert result["verification_incomplete"] is True
+        assert result["remaining_planned_target_ids"] == ["1"]
+        assert len(result["failed"]) == 1
     finally:
         store.close()
 
