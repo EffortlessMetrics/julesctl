@@ -36,19 +36,21 @@ jobs:
                   raise SystemExit("controller API import marker not found")
               text = text.replace(import_marker, import_marker + import_line, 1)
 
-          old_expression = (
-              "activity.model_dump(by_alias=True, exclude_none=True) "
-              "for activity in self.ctx.api.iter_activities(session.id)"
-          )
-          new_expression = (
-              "activity_result(activity) "
-              "for activity in self.ctx.api.iter_activities(session.id)"
-          )
-          if text.count(old_expression) != 1:
+          old_block = '''        activities = [
+              activity.model_dump(by_alias=True, exclude_none=True)
+              for activity in self.ctx.api.iter_activities(session.id)
+          ]
+          '''
+          new_block = '''        activities = [
+              activity_result(activity)
+              for activity in self.ctx.api.iter_activities(session.id)
+          ]
+          '''
+          if text.count(old_block) != 1:
               raise SystemExit(
-                  f"expected one controller result expression, found {text.count(old_expression)}"
+                  f"expected one controller result block, found {text.count(old_block)}"
               )
-          text = text.replace(old_expression, new_expression, 1)
+          text = text.replace(old_block, new_block, 1)
           path.write_text(text, encoding="utf-8")
           PY
           ruff format .
