@@ -70,6 +70,8 @@ def _activities() -> list[ActivityWire]:
                             "mimeType": "image/png",
                             "data": "aGVsbG8=",
                             "futureMediaField": "retained",
+                            "inlineDataOmitted": "server-value",
+                            "decodedBytes": 999,
                         },
                         "futureArtifact": {"x": 1},
                     },
@@ -123,10 +125,16 @@ def test_activity_result_redacts_media_body_and_preserves_metadata() -> None:
     media = artifacts[2]["media"]
     assert "data" not in media
     assert media == {
-        "mimeType": "image/png",
-        "futureMediaField": "retained",
-        "inlineDataOmitted": True,
-        "decodedBytes": 5,
+        "metadata": {
+            "mimeType": "image/png",
+            "futureMediaField": "retained",
+            "inlineDataOmitted": "server-value",
+            "decodedBytes": 999,
+        },
+        "redaction": {
+            "inline_data_omitted": True,
+            "decoded_bytes": 5,
+        },
     }
 
 
@@ -164,7 +172,12 @@ def test_client_result_never_reintroduces_inline_media() -> None:
     assert isinstance(activities, list)
     media = activities[0]["artifacts"][2]["media"]
     assert "data" not in media
-    assert media["inlineDataOmitted"] is True
+    assert media["metadata"]["inlineDataOmitted"] == "server-value"
+    assert media["metadata"]["decodedBytes"] == 999
+    assert media["redaction"] == {
+        "inline_data_omitted": True,
+        "decoded_bytes": 5,
+    }
 
 
 def test_duplicate_patch_is_deduplicated() -> None:
