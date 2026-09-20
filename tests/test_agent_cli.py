@@ -15,7 +15,19 @@ class FakeActivity:
         self.activity_id = activity_id
 
     def model_dump(self, **_: object) -> dict[str, object]:
-        return {"name": f"activities/{self.activity_id}", "id": self.activity_id}
+        return {
+            "name": f"activities/{self.activity_id}",
+            "id": self.activity_id,
+            "artifacts": [
+                {
+                    "media": {
+                        "mimeType": "image/png",
+                        "data": "aGVsbG8=",
+                        "futureMediaField": "retained",
+                    }
+                }
+            ],
+        }
 
 
 class FakeClient:
@@ -148,7 +160,28 @@ def test_activities_and_message_aliases(monkeypatch) -> None:
     _fake(monkeypatch)
     activities = runner.invoke(app, ["activities", "1", "--json"])
     assert activities.exit_code == 0, activities.output
-    assert json.loads(activities.stdout)["data"]["items"][0]["id"] == "a"
+    item = json.loads(activities.stdout)["data"]["items"][0]
+    assert item["id"] == "a"
+    media = item["artifacts"][0]["media"]
+    assert "data" not in media
+    assert media == {
+        "metadata": {
+            "mimeType": "image/png",
+            "futureMediaField": "retained",
+        },
+        "redaction": {
+            "inline_data_omitted": True,
+            "decoded_bytes": 5,
+        },
+    }
+
+    activities_jsonl = runner.invoke(app, ["activities", "1", "--jsonl"])
+    assert activities_jsonl.exit_code == 0, activities_jsonl.output
+    row = json.loads(activities_jsonl.stdout)
+    jsonl_media = row["artifacts"][0]["media"]
+    assert "data" not in jsonl_media
+    assert jsonl_media == media
+    assert row["schema"] == "julesctl.activity.v1"
 
     message = runner.invoke(app, ["msg", "1", "continue", "--json"])
     assert message.exit_code == 0, message.output

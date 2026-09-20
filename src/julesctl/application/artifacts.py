@@ -32,20 +32,55 @@ def _change_set(
     return result
 
 
-def _media_summary(value: dict[str, Any], *, activity_name: str) -> dict[str, object]:
+def _decoded_media_bytes(value: dict[str, Any]) -> int | None:
     encoded = value.get("data")
-    decoded_bytes: int | None = None
-    if isinstance(encoded, str):
-        try:
-            decoded_bytes = len(base64.b64decode(encoded, validate=True))
-        except (ValueError, TypeError):
-            decoded_bytes = None
+    if not isinstance(encoded, str):
+        return None
+    try:
+        return len(base64.b64decode(encoded, validate=True))
+    except (ValueError, TypeError):
+        return None
+
+
+def _media_summary(value: dict[str, Any], *, activity_name: str) -> dict[str, object]:
     return {
         "activity_name": activity_name,
         "mime_type": value.get("mimeType"),
-        "decoded_bytes": decoded_bytes,
+        "decoded_bytes": _decoded_media_bytes(value),
         "inline_data_omitted": True,
     }
+
+
+def _redacted_media(value: dict[str, Any]) -> dict[str, object]:
+    """Preserve all server metadata while isolating controller-owned redaction evidence."""
+
+    metadata = {key: item for key, item in value.items() if key != "data"}
+    redaction: dict[str, object] = {"inline_data_omitted": True}
+    decoded_bytes = _decoded_media_bytes(value)
+    if decoded_bytes is not None:
+        redaction["decoded_bytes"] = decoded_bytes
+    return {
+        "metadata": metadata,
+        "redaction": redaction,
+    }
+
+
+def activity_result(activity: ActivityWire) -> dict[str, object]:
+    """Return one activity without embedding documented inline media bodies."""
+
+    result = activity.model_dump(by_alias=True, exclude_none=True)
+    artifacts = result.get("artifacts")
+    if not isinstance(artifacts, list):
+        return result
+
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        media = artifact.get("media")
+        if not isinstance(media, dict) or "data" not in media:
+            continue
+        artifact["media"] = _redacted_media(media)
+    return result
 
 
 def collect_artifacts(

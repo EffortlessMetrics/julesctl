@@ -3,7 +3,12 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 
-from .application.artifacts import collect_artifacts, select_patch, select_pull_request
+from .application.artifacts import (
+    activity_result,
+    collect_artifacts,
+    select_patch,
+    select_pull_request,
+)
 from .application.prune import apply_plan_with_settle, select_prune_targets, snapshot_targets
 from .application.sessions import filter_sessions
 from .application.steering import approve_once, message_once
@@ -150,9 +155,7 @@ class JulesClient:
         return {
             "session": self._controller.normalize_session(session, origin=origin),
             **collect_artifacts(session, activities),
-            "activities": [
-                activity.model_dump(by_alias=True, exclude_none=True) for activity in activities
-            ],
+            "activities": [activity_result(activity) for activity in activities],
         }
 
     def patch(self, session_id: str, *, index: int = -1) -> dict[str, object]:
@@ -203,6 +206,13 @@ class JulesClient:
         source_name: str | None = None
         if repo is not None:
             source_name = str(self.resolve_source(repo)["source_name"])
+        sessions = self.list_sessions(all_history=True)
+        baseline_session_ids: list[str] = []
+        for session in sessions:
+            session_id = session.get("id")
+            if session_id is None:
+                raise InputError("session inventory contains a row without an ID")
+            baseline_session_ids.append(str(session_id))
         selector: dict[str, object] = {
             "states": states or [],
             "source_name": source_name,
@@ -211,8 +221,8 @@ class JulesClient:
             "nonterminal": nonterminal,
             "all_sessions": all_sessions,
             "include_unknown": include_unknown,
+            "baseline_session_ids": sorted(set(baseline_session_ids)),
         }
-        sessions = self.list_sessions(all_history=True)
         selected = select_prune_targets(
             sessions,
             states=states,

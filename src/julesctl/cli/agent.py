@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 
+from ..application.artifacts import activity_result
 from ..application.specs import derive_title, read_prompt
 from ..client import JulesClient
 from ..domain.errors import JulesCtlError
@@ -190,10 +191,7 @@ def activities_command(
         if json_output and jsonl:
             raise ValueError("--json and --jsonl are mutually exclusive")
         with JulesClient.from_env() as client:
-            items = [
-                activity.model_dump(by_alias=True, exclude_none=True)
-                for activity in client.iter_activities(session_id)
-            ]
+            items = [activity_result(activity) for activity in client.iter_activities(session_id)]
         if jsonl:
             emit_jsonl(
                 [

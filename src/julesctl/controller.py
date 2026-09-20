@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass
 
 from .api.client import JulesApiClient
+from .application.artifacts import activity_result
 from .application.reconcile import reconcile_session_activities
 from .config import Settings
 from .domain.errors import AdmissionError, ApiError, IndeterminateError, InputError
@@ -496,8 +497,7 @@ class JulesController:
         origin = "managed" if session.id in self.ctx.store.managed_session_ids() else "external"
         self._remember_session(session, origin=origin)
         activities = [
-            activity.model_dump(by_alias=True, exclude_none=True)
-            for activity in self.ctx.api.iter_activities(session.id)
+            activity_result(activity) for activity in self.ctx.api.iter_activities(session.id)
         ]
         return {
             "session": self.normalize_session(session, origin=origin),
