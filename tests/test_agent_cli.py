@@ -165,10 +165,14 @@ def test_activities_and_message_aliases(monkeypatch) -> None:
     media = item["artifacts"][0]["media"]
     assert "data" not in media
     assert media == {
-        "mimeType": "image/png",
-        "futureMediaField": "retained",
-        "inlineDataOmitted": True,
-        "decodedBytes": 5,
+        "metadata": {
+            "mimeType": "image/png",
+            "futureMediaField": "retained",
+        },
+        "redaction": {
+            "inline_data_omitted": True,
+            "decoded_bytes": 5,
+        },
     }
 
     activities_jsonl = runner.invoke(app, ["activities", "1", "--jsonl"])
