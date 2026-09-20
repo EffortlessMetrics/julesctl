@@ -52,4 +52,8 @@ def test_controller_session_result_redacts_inline_media() -> None:
     assert isinstance(activities, list)
     media = activities[0]["artifacts"][0]["media"]
     assert "data" not in media
-    assert media["inlineDataOmitted"] is True
+    assert media == {
+        "mimeType": "image/png",
+        "inlineDataOmitted": True,
+        "decodedBytes": 5,
+    }
