@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from julesctl.application.artifacts import (
+    activity_result,
     collect_artifacts,
     select_patch,
     select_pull_request,
 )
+from julesctl.client import JulesClient
 from julesctl.domain.errors import InputError
 from julesctl.domain.models import ActivityWire, SessionWire
 
@@ -65,6 +69,7 @@ def _activities() -> list[ActivityWire]:
                         "media": {
                             "mimeType": "image/png",
                             "data": "aGVsbG8=",
+                            "futureMediaField": "retained",
                         },
                         "futureArtifact": {"x": 1},
                     },
@@ -109,6 +114,57 @@ def test_collect_artifacts_normalizes_outputs_without_media_data() -> None:
             "fields": ["futureArtifact"],
         }
     ]
+
+
+def test_activity_result_redacts_media_body_and_preserves_metadata() -> None:
+    result = activity_result(_activities()[0])
+    artifacts = result["artifacts"]
+    assert isinstance(artifacts, list)
+    media = artifacts[2]["media"]
+    assert "data" not in media
+    assert media == {
+        "mimeType": "image/png",
+        "futureMediaField": "retained",
+        "inlineDataOmitted": True,
+        "decodedBytes": 5,
+    }
+
+
+class ResultApi:
+    def get_session(self, session_id: str) -> SessionWire:
+        assert session_id == "1"
+        return _session()
+
+    def iter_activities(self, session_id: str):
+        assert session_id == "1"
+        return iter(_activities())
+
+
+class ResultController:
+    def __init__(self) -> None:
+        self.ctx = SimpleNamespace(
+            api=ResultApi(),
+            store=SimpleNamespace(managed_session_ids=lambda: {"1"}),
+        )
+
+    @staticmethod
+    def _remember_session(session: SessionWire, *, origin: str) -> None:
+        assert session.id == "1"
+        assert origin == "managed"
+
+    @staticmethod
+    def normalize_session(session: SessionWire, *, origin: str) -> dict[str, object]:
+        return {"id": session.id, "origin": origin}
+
+
+def test_client_result_never_reintroduces_inline_media() -> None:
+    client = JulesClient(ResultController())  # type: ignore[arg-type]
+    result = client.result("1")
+    activities = result["activities"]
+    assert isinstance(activities, list)
+    media = activities[0]["artifacts"][2]["media"]
+    assert "data" not in media
+    assert media["inlineDataOmitted"] is True
 
 
 def test_duplicate_patch_is_deduplicated() -> None:
